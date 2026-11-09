@@ -117,8 +117,9 @@ h1 em {
   border-color: rgba(255, 255, 255, 0.28);
 }
 .league-input-row input {
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
+  width: auto;
   padding: 0 11px;
   color: var(--ink);
   border: 0;
@@ -127,11 +128,11 @@ h1 em {
   font: 13px var(--mono);
 }
 .share-button {
-  min-width: 82px;
+  min-width: 78px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   padding: 0 10px;
   border: 0;
   border-left: 1px solid var(--line);
@@ -140,6 +141,7 @@ h1 em {
   cursor: pointer;
   font: 500 10px var(--mono);
   transition: background .15s ease, color .15s ease;
+  flex-shrink: 0;
 }
 .share-button:hover {
   color: var(--ink);
@@ -150,11 +152,11 @@ h1 em {
   background: rgba(16, 185, 129, 0.15);
 }
 .refresh-button {
-  min-width: 106px;
+  min-width: 86px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 6px;
   padding: 0 11px;
   border: 0;
   border-left: 1px solid var(--line);
@@ -163,6 +165,7 @@ h1 em {
   cursor: pointer;
   font: 500 10px var(--mono);
   transition: background .15s ease;
+  flex-shrink: 0;
 }
 .refresh-button:hover:not(:disabled) {
   background: var(--control-hover);
@@ -1246,36 +1249,76 @@ tbody tr:active td.sticky-col {
 }
 
 /* MOBILE STANDINGS CARDS */
+/* MOBILE STANDINGS & POSTSEASON CARDS */
 .m-standings-card-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 .m-standings-card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 9px 11px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
+.m-standings-card:active,
+.m-standings-card:hover {
+  background: var(--surface-raised);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+.m-standings-card.bye-card {
+  border-left: 3px solid #f59e0b;
+}
+.m-standings-card.playoff-card {
+  border-left: 3px solid #38bdf8;
+}
+.m-standings-card.lottery-card {
+  border-left: 3px solid rgba(255, 255, 255, 0.14);
+}
+
 .m-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
 }
 .m-card-identity {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+  flex: 1;
 }
 .m-card-rank {
   font: 700 11.5px var(--mono);
   color: var(--muted);
   min-width: 20px;
+}
+
+/* ODDS ROW WITH VISUAL TRACK */
+.m-card-odds-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+.m-odds-label-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.m-odds-val {
+  font: 700 11px var(--mono);
+  color: #38bdf8;
 }
 
 /* RECORD SPLITS STRIP (HEAD TO HEAD & MEDIAN) */
@@ -1292,7 +1335,7 @@ tbody tr:active td.sticky-col {
   padding: 2px 7px;
   border-radius: 4px;
   background: var(--surface-raised);
-  border: 1px solid var(--line-subtle);
+  border: 1px solid var(--line);
   font-family: var(--mono);
   font-size: 10px;
 }
@@ -1317,36 +1360,34 @@ tbody tr:active td.sticky-col {
 
 .m-card-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  background: var(--surface-raised);
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--line-subtle);
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
 }
 .m-metric-cell {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
-  padding: 2px 4px;
+  padding: 6px 8px;
+  background: var(--surface-raised);
+  border-radius: 6px;
+  border: 1px solid var(--line);
 }
 .m-metric-cell.highlight {
-  background: var(--accent-soft);
-  padding: 3px 5px;
-  border-radius: 4px;
-  border: 1px solid var(--accent-border);
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.25);
 }
 .m-metric-label {
-  font: 600 8.5px var(--mono);
+  font: 700 8.5px var(--mono);
   color: var(--muted);
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .m-metric-val {
-  font: 600 12px var(--mono);
+  font: 700 12px var(--mono);
   color: var(--ink);
   white-space: nowrap;
   line-height: 1.25;
@@ -1355,12 +1396,58 @@ tbody tr:active td.sticky-col {
   color: var(--accent-text);
 }
 .m-metric-sub {
-  font: 9px var(--mono);
+  font: 500 9.5px var(--mono);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   line-height: 1.2;
+}
+
+.m-card-footer {
+  display: flex;
+  margin-top: 2px;
+}
+.m-view-path-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+  font: 600 11px var(--mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.m-view-path-btn:hover {
+  background: rgba(56, 189, 248, 0.2);
+  color: #fff;
+}
+
+/* MOBILE CUTOFF DIVIDERS */
+.m-cutoff-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font: 700 10px var(--mono);
+  text-align: center;
+}
+.m-cutoff-divider.bye {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px dashed rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+.m-cutoff-divider.playoff {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px dashed rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
 }
 
 /* MOBILE WEEKLY LEADERBOARD CARDS */
@@ -1763,8 +1850,27 @@ tbody tr:active td.sticky-col {
   }
   .view-tabs button {
     justify-content: center;
-    padding: 8px 4px;
+    padding: 7px 2px;
     font-size: 10px;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .filter-chips-row {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    padding-bottom: 6px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .filter-chips-row::-webkit-scrollbar {
+    display: none;
+  }
+  .filter-chip {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .cutoff-showdowns-grid {
+    grid-template-columns: 1fr;
   }
   .model-cards-grid {
     grid-template-columns: 1fr;
@@ -1781,9 +1887,49 @@ tbody tr:active td.sticky-col {
   }
 }
 
+@media (max-width: 600px) {
+  .showdown-body {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .showdown-team.right {
+    align-items: flex-start;
+  }
+  .team-cell.right {
+    justify-content: flex-start;
+  }
+  .team-meta.right {
+    align-items: flex-start;
+    text-align: left;
+  }
+  .showdown-center {
+    flex-direction: row;
+    justify-content: center;
+    padding: 4px 0;
+  }
+  .modal-backdrop {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal-card {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 14px 14px 0 0;
+    border-bottom: 0;
+  }
+  .modal-header {
+    padding: 14px 16px;
+  }
+  .modal-body {
+    padding: 16px;
+    gap: 14px;
+  }
+}
+
 @media (max-width: 480px) {
   .topbar {
-    height: 56px;
+    height: 54px;
   }
   .brand span {
     font-size: 12px;
@@ -1791,33 +1937,54 @@ tbody tr:active td.sticky-col {
   .season-label {
     display: none;
   }
-  .m-card-metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
-  }
-  .m-inspector-summary-grid {
-    grid-template-columns: 1fr;
-    gap: 6px;
+  .league-input-row {
+    height: 38px;
   }
   .share-button {
-    min-width: auto;
-    padding: 0 10px;
+    min-width: 0;
+    padding: 0 8px;
     font-size: 11px;
+    gap: 4px;
   }
   .refresh-button {
-    min-width: auto;
-    padding: 0 12px;
+    min-width: 0;
+    padding: 0 8px;
     font-size: 11px;
+    gap: 4px;
   }
-  .m-sim-schedule-card {
-    flex-direction: column;
-    align-items: flex-start;
+  .m-card-metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
     gap: 6px;
   }
-  .m-sim-card-right {
+  .sim-teams-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sim-vs-divider {
+    align-self: center;
+    padding: 2px 0;
+  }
+  .sim-week-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 4px;
+  }
+  .sim-week-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  .sim-week-pill {
+    flex-shrink: 0;
+  }
+  .whatif-banner {
+    flex-direction: column;
     align-items: flex-start;
-    flex-direction: row;
-    gap: 8px;
+    gap: 12px;
+  }
+  .whatif-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 
