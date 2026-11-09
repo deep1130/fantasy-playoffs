@@ -450,9 +450,9 @@ export function App() {
       : team.isEliminatedFromPlayoffs
       ? 'Eliminated'
       : team.magicNumber !== null
-      ? `M: ${team.magicNumber}`
+      ? `Magic #${team.magicNumber}`
       : team.eliminationNumber !== null
-      ? `E: ${team.eliminationNumber}`
+      ? `Elim #${team.eliminationNumber}`
       : '—'
 
     const playoffSub = team.hasClinchedPlayoff
@@ -470,9 +470,9 @@ export function App() {
       : team.isEliminatedFromBye
       ? 'Out'
       : team.byeMagicNumber !== null
-      ? `M: ${team.byeMagicNumber}`
+      ? `Magic #${team.byeMagicNumber}`
       : team.byeEliminationNumber !== null
-      ? `E: ${team.byeEliminationNumber}`
+      ? `Elim #${team.byeEliminationNumber}`
       : '—'
 
     const byeSub = team.hasClinchedBye
@@ -573,6 +573,11 @@ export function App() {
             <strong className="m-metric-val">{formatDec(team.pointsFor, 1)}</strong>
             <span className="m-metric-sub">Tiebreaker</span>
           </div>
+        </div>
+
+        <div className="m-card-action-footer">
+          <span>Tap for Clinch Scenarios, Weekly Matrix &amp; Schedule</span>
+          <span className="m-card-action-cta">View Path →</span>
         </div>
       </div>
     )
@@ -867,6 +872,21 @@ export function App() {
         {/* VIEW 1: STANDINGS & CLINCH MATH */}
         {tab === 'clinch' && (
           <>
+            <div className="board-legend-bar">
+              <div className="legend-items">
+                <span className="legend-item">
+                  <strong>Magic # (M#)</strong> = Any combination of your wins + #7 seed losses needed to lock a Top-6 Playoff spot (or #3 seed losses for a Top-2 Bye).
+                </span>
+                <span className="legend-sep">·</span>
+                <span className="legend-item">
+                  <strong>Elim # (E#)</strong> = Combined losses + #6 seed wins that eliminate a team.
+                </span>
+              </div>
+              <span className="legend-click-hint">
+                Click any team for Clinch Scenarios &amp; Schedule →
+              </span>
+            </div>
+
             <div className="desktop-table-view">
               <div className="table-wrap">
                 <table>
@@ -876,8 +896,8 @@ export function App() {
                       <th>FRANCHISE</th>
                       <th>ACTUAL W–L</th>
                       <th>STATUS</th>
-                      <th title="Magic Number (M) for top 6 to clinch, or Elimination Number (E) for seeds 7+">PLAYOFF CLINCH</th>
-                      <th title="Magic Number (M) for top 2 to clinch a first-round bye, or Elimination Number (E) for seeds 3+">BYE RACE (TOP 2)</th>
+                      <th title="Magic Number (M#) for top 6 to clinch, or Elimination Number (E#) for seeds 7+">PLAYOFF CLINCH</th>
+                      <th title="Magic Number (M#) for top 2 to clinch a first-round bye, or Elimination Number (E#) for seeds 3+">BYE RACE (TOP 2)</th>
                       <th title="Mathematical win floor and ceiling across remaining weeks">WIN RANGE</th>
                       <th title="Playoff and First-Round Bye probabilities">POSTSEASON ODDS</th>
                       <th title="Total Starter Points For (Primary Tiebreaker)">POINTS FOR</th>
@@ -917,9 +937,9 @@ export function App() {
                         : team.isEliminatedFromPlayoffs
                         ? 'Eliminated'
                         : team.magicNumber !== null
-                        ? `M: ${team.magicNumber}`
+                        ? `Magic #${team.magicNumber}`
                         : team.eliminationNumber !== null
-                        ? `E: ${team.eliminationNumber}`
+                        ? `Elim #${team.eliminationNumber}`
                         : '—'
 
                       const playoffSub = team.hasClinchedPlayoff
@@ -937,9 +957,9 @@ export function App() {
                         : team.isEliminatedFromBye
                         ? 'Out'
                         : team.byeMagicNumber !== null
-                        ? `M: ${team.byeMagicNumber}`
+                        ? `Magic #${team.byeMagicNumber}`
                         : team.byeEliminationNumber !== null
-                        ? `E: ${team.byeEliminationNumber}`
+                        ? `Elim #${team.byeEliminationNumber}`
                         : '—'
 
                       const byeSub = team.hasClinchedBye
@@ -983,7 +1003,9 @@ export function App() {
                                   <span className="team-title" title={team.name}>
                                     {team.name}
                                   </span>
-                                  <span className="team-sub">{team.ownerDisplayName}</span>
+                                  <span className="team-sub">
+                                    {team.ownerDisplayName} <span className="row-click-cue">· View Path →</span>
+                                  </span>
                                 </div>
                               </div>
                             </td>
