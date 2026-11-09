@@ -120,9 +120,8 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
   const hasMedianMatch = Number(league.settings.league_average_match) === 1
   const totalTeams = rosters.length || Number(league.total_rosters) || 12
 
-  // Fetch matchup data for all weeks up to max(currentWeek, lastScoredWeek, regularSeasonWeeks)
-  // Fetching up to currentWeek gets all completed and current matchups!
-  const targetEndWeek = Math.min(regularSeasonWeeks, Math.max(currentWeek, lastScoredWeek, 1))
+  // Fetch matchup data for all weeks up to regularSeasonWeeks (to support complete What-If simulation)
+  const targetEndWeek = Math.min(18, Math.max(regularSeasonWeeks, currentWeek, lastScoredWeek, 1))
   const weekNumbers = Array.from({ length: targetEndWeek }, (_, i) => i + 1)
 
   const weekResults = await Promise.all(
