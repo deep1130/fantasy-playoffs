@@ -1,12 +1,43 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownUp, ArrowUpRight, Calculator, Check, ChevronDown, CircleAlert, Clock3, RefreshCw, Search, Share2, ShieldCheck, Trophy } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import {
+  Award,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  Clock3,
+  Flame,
+  HelpCircle,
+  Lock,
+  RefreshCw,
+  RotateCcw,
+  Search,
+  Share2,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  Trophy,
+  Zap,
+} from 'lucide-react'
+import { analyzeLeagueClinch, type ClinchStatus, type LeagueClinchSummary } from './clinch'
+import { getDemoLeagueData } from './demoData'
 import { projectDraftOrder } from './projection'
 import { loadLeagueData, type LeagueData } from './sleeper'
 import './App.css'
 
-type View = 'order' | 'assets'
+type MainTab = 'clinch' | 'expected' | 'simulator' | 'picks'
+type FilterOption = 'ALL' | 'CLINCHED' | 'BUBBLE' | 'ELIMINATED'
+
 const formatNumber = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
-const formatChance = (chance: number) => chance >= 0.995 ? '99%+' : chance === 0 ? '0%' : chance < 0.005 ? '<0.5%' : `${Math.round(chance * 100)}%`
+const formatPct = (chance: number) => {
+  if (chance >= 0.99) return '>99%'
+  if (chance <= 0.01 && chance > 0) return '<1%'
+  if (chance === 0) return '0%'
+  return `${Math.round(chance * 100)}%`
+}
 
 function getInitialLeagueId(): string {
   if (typeof window !== 'undefined') {
@@ -20,27 +51,35 @@ function getInitialLeagueId(): string {
   return ''
 }
 
-function teamName(data: LeagueData, roster: LeagueData['rosters'][number]): string {
-  const owner = data.users.find((user) => user.user_id === roster.owner_id)
-  return owner?.metadata?.team_name || owner?.display_name || `Team ${roster.roster_id}`
-}
-
-function App() {
+export function App() {
   const initialId = useMemo(getInitialLeagueId, [])
-  const [leagueId, setLeagueId] = useState(initialId)
-  const [data, setData] = useState<LeagueData | null>(null)
-  const [busy, setBusy] = useState(Boolean(initialId))
+  const initialData = useMemo(() => {
+    if (!initialId || initialId === 'demo-median-league' || initialId.startsWith('demo')) {
+      return getDemoLeagueData()
+    }
+    return null
+  }, [initialId])
+
+  const [leagueId, setLeagueId] = useState(initialId || 'demo-median-league')
+  const [data, setData] = useState<LeagueData | null>(initialData)
+  const [busy, setBusy] = useState(Boolean(initialId && initialId !== 'demo-median-league' && !initialId.startsWith('demo')))
   const [error, setError] = useState('')
-  const [view, setView] = useState<View>('order')
+  const [tab, setTab] = useState<MainTab>('clinch')
+  const [filter, setFilter] = useState<FilterOption>('ALL')
   const [search, setSearch] = useState('')
-  const [lastUpdated, setLastUpdated] = useState<number | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<number | null>(initialData?.lastUpdated ?? null)
   const [copied, setCopied] = useState(false)
+  const [expandedRosterId, setExpandedRosterId] = useState<number | null>(null)
+
+  // Simulation overrides: week -> matchupId -> winnerRosterId
+  const [simMatchupWinners, setSimMatchupWinners] = useState<Record<number, Record<number, number>>>({})
+  // Simulation overrides: week -> rosterId -> beatMedian (boolean)
+  const [simMedianWinners, setSimMedianWinners] = useState<Record<number, Record<number, boolean>>>({})
 
   async function refresh(targetId?: string) {
     const activeId = (targetId ?? leagueId).trim()
-    if (!activeId) {
-      setError('Please enter a Sleeper League ID.')
-      setBusy(false)
+    if (!activeId || activeId === 'demo-median-league' || activeId.startsWith('demo')) {
+      loadDemo()
       return
     }
     setBusy(true)
@@ -57,6 +96,24 @@ function App() {
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Could not load league data.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function loadDemo() {
+    setBusy(true)
+    setError('')
+    try {
+      const demo = getDemoLeagueData()
+      setData(demo)
+      setLeagueId('demo-median-league')
+      setLastUpdated(demo.lastUpdated)
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        url.searchParams.set('league', 'demo-median-league')
+        window.history.replaceState({}, '', url.toString())
+      }
     } finally {
       setBusy(false)
     }
@@ -80,78 +137,181 @@ function App() {
 
   useEffect(() => {
     const id = getInitialLeagueId()
-    if (id) {
+    if (id && id !== 'demo-median-league' && !id.startsWith('demo')) {
       void refresh(id)
-    } else {
-      setBusy(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Analyze Clinch & Expected Wins
+  const clinchSummary: LeagueClinchSummary | null = useMemo(() => {
+    if (!data) return null
+    return analyzeLeagueClinch(data)
+  }, [data])
+
+  // Draft pick projections (for legacy draft tab)
   const picks = useMemo(() => (data ? projectDraftOrder(data) : []), [data])
+
+  // Filtered teams list
   const query = search.trim().toLowerCase()
-  const visiblePicks = picks.filter((team) => `${team.name} ${team.pickHolder} ${team.record}`.toLowerCase().includes(query))
-    .sort((first, second) => first.pick - second.pick)
-  const rookieYear = Number(data?.league.season ?? 2026) + 1
-  const totalTeams = data?.rosters.length ?? 0
-  const playoffTeamsCount = data ? Math.min(totalTeams, Math.max(0, Number(data.league.settings.playoff_teams ?? 6))) : 6
-  const nonPlayoffCount = data ? Math.max(0, totalTeams - playoffTeamsCount) : 6
-  const currentWeek = data?.currentWeek ?? 0
-  const hasMedianMatch = Number(data?.league.settings.league_average_match) === 1
-  const regularSeasonEnd = data ? Math.min(18, Math.max(1, (Number(data.league.settings.playoff_week_start) || 15) - 1)) : 14
-  const remainingWeeks = data ? Math.max(0, regularSeasonEnd - Math.max(1, data.currentWeek) + 1) : 0
-  const remainingGames = remainingWeeks * (hasMedianMatch ? 2 : 1)
+  const filteredTeams = useMemo(() => {
+    if (!clinchSummary) return []
+    return clinchSummary.teams.filter((team) => {
+      const matchesSearch = !query || `${team.name} ${team.ownerDisplayName}`.toLowerCase().includes(query)
+      if (!matchesSearch) return false
 
-  const scoring = data?.league.scoring_settings
-  const scoringSummary = useMemo(() => {
-    if (!scoring) return null
-    const parts: string[] = []
-    const ppr = Number(scoring.rec ?? 0)
-    parts.push(ppr === 1 ? '1 PPR' : ppr === 0.5 ? '0.5 Half-PPR' : `${ppr} PPR`)
-    if (scoring.bonus_rec_te) {
-      parts.push(`+${scoring.bonus_rec_te} TE premium`)
-    }
-    if (scoring.pass_yd) {
-      parts.push(`${scoring.pass_yd} pass yd`)
-    }
-    if (scoring.pass_td) {
-      parts.push(`${scoring.pass_td} pass TD`)
-    }
-    if (scoring.pass_int) {
-      parts.push(`${scoring.pass_int} INT`)
-    }
-    if (scoring.rush_yd) {
-      parts.push(`${scoring.rush_yd} rush yd`)
-    }
-    if (scoring.rec_yd) {
-      parts.push(`${scoring.rec_yd} rec yd`)
-    }
-    return parts.join(', ')
-  }, [scoring])
+      if (filter === 'CLINCHED') {
+        return team.status === 'CLINCHED_PLAYOFF' || team.status === 'CLINCHED_BYE'
+      }
+      if (filter === 'BUBBLE') {
+        return team.status === 'ON_THE_BUBBLE' || team.status === 'IN_THE_HUNT'
+      }
+      if (filter === 'ELIMINATED') {
+        return team.status === 'ELIMINATED'
+      }
+      return true
+    })
+  }, [clinchSummary, query, filter])
 
-  const hasMilestoneBonuses = useMemo(() => {
-    if (!scoring) return false
-    return Boolean(
-      scoring.bonus_rec_yd_100 ||
-      scoring.bonus_rec_yd_200 ||
-      scoring.bonus_rush_yd_100 ||
-      scoring.bonus_rush_yd_200 ||
-      scoring.bonus_rush_rec_yd_100 ||
-      scoring.bonus_rush_rec_yd_200 ||
-      scoring.bonus_pass_yd_300 ||
-      scoring.bonus_pass_yd_400 ||
-      scoring.bonus_pass_cmp_25
+  // Helper for status badge
+  function renderStatusBadge(status: ClinchStatus, label: string) {
+    switch (status) {
+      case 'CLINCHED_BYE':
+        return <span className="status-pill status-clinched-bye"><Trophy size={12} /> {label}</span>
+      case 'CLINCHED_PLAYOFF':
+        return <span className="status-pill status-clinched-playoff"><Check size={12} /> {label}</span>
+      case 'IN_THE_HUNT':
+        return <span className="status-pill status-in-the-hunt"><Flame size={12} /> {label}</span>
+      case 'ON_THE_BUBBLE':
+        return <span className="status-pill status-on-the-bubble"><ShieldAlert size={12} /> {label}</span>
+      case 'WORK_TO_DO':
+        return <span className="status-pill status-work-to-do"><Zap size={12} /> {label}</span>
+      case 'ELIMINATED':
+        return <span className="status-pill status-eliminated">✕ {label}</span>
+    }
+  }
+
+  // Helper for clinch meter bar
+  function renderClinchMeter(meter: number, status: ClinchStatus) {
+    let fillClass = 'meter-fill-mid'
+    if (status === 'CLINCHED_BYE' || status === 'CLINCHED_PLAYOFF') fillClass = 'meter-fill-clinched'
+    else if (status === 'IN_THE_HUNT') fillClass = 'meter-fill-high'
+    else if (status === 'WORK_TO_DO') fillClass = 'meter-fill-low'
+    else if (status === 'ELIMINATED') fillClass = 'meter-fill-elim'
+
+    return (
+      <div className="meter-wrap" title={`Clinch Closeness: ${meter}%`}>
+        <div className="meter-track">
+          <div className={`meter-fill ${fillClass}`} style={{ width: `${meter}%` }} />
+        </div>
+        <span className="meter-val">{meter}%</span>
+      </div>
     )
-  }, [scoring])
+  }
+
+  // Helper for schedule luck
+  function renderLuck(luck: number) {
+    if (Math.abs(luck) < 0.2) {
+      return <span className="luck-pill luck-even">0.0 (Even)</span>
+    }
+    if (luck > 0) {
+      return <span className="luck-pill luck-lucky"><TrendingUp size={11} /> +{luck.toFixed(1)} W</span>
+    }
+    return <span className="luck-pill luck-unlucky"><TrendingDown size={11} /> {luck.toFixed(1)} W</span>
+  }
+
+  // Simulator helper: toggle match winner
+  function handlePickWinner(week: number, matchupId: number, winnerRosterId: number) {
+    setSimMatchupWinners((prev) => {
+      const weekPicks = { ...(prev[week] || {}) }
+      if (weekPicks[matchupId] === winnerRosterId) {
+        delete weekPicks[matchupId]
+      } else {
+        weekPicks[matchupId] = winnerRosterId
+      }
+      return { ...prev, [week]: weekPicks }
+    })
+  }
+
+  // Simulator helper: toggle median win
+  function handleToggleMedian(week: number, rosterId: number) {
+    setSimMedianWinners((prev) => {
+      const weekMedians = { ...(prev[week] || {}) }
+      weekMedians[rosterId] = !weekMedians[rosterId]
+      return { ...prev, [week]: weekMedians }
+    })
+  }
+
+  // Reset simulator
+  function handleResetSim() {
+    setSimMatchupWinners({})
+    setSimMedianWinners({})
+  }
+
+  // Compute simulated standings
+  const simulatedTeams = useMemo(() => {
+    if (!clinchSummary) return []
+    const overrideWins = new Map<number, number>()
+
+    // Add up simulation picks
+    for (const weekPicks of Object.values(simMatchupWinners)) {
+      for (const winnerId of Object.values(weekPicks)) {
+        overrideWins.set(winnerId, (overrideWins.get(winnerId) ?? 0) + 1)
+      }
+    }
+    for (const weekMedians of Object.values(simMedianWinners)) {
+      for (const [rosterIdStr, beat] of Object.entries(weekMedians)) {
+        if (beat) {
+          const rId = Number(rosterIdStr)
+          overrideWins.set(rId, (overrideWins.get(rId) ?? 0) + 1)
+        }
+      }
+    }
+
+    return clinchSummary.teams.map((t) => {
+      const addedWins = overrideWins.get(t.rosterId) ?? 0
+      const simTotalWins = t.totalWins + addedWins
+      return {
+        ...t,
+        simTotalWins,
+        addedWins,
+      }
+    }).sort((a, b) => b.simTotalWins - a.simTotalWins || b.pointsFor - a.pointsFor)
+  }, [clinchSummary, simMatchupWinners, simMedianWinners])
+
+  const totalTeams = clinchSummary?.totalTeams ?? 0
+  const playoffSpots = clinchSummary?.playoffSpots ?? 6
+  const hasMedian = clinchSummary?.hasMedianMatch ?? false
 
   return (
     <main className="app-shell">
+      {/* Top Bar */}
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Draft Ledger home"><span className="brand-mark"><ArrowDownUp size={17} strokeWidth={2.5} /></span><span>DRAFT<span className="brand-light">LEDGER</span></span></a>
-        <div className="topbar-right"><span className="season-label">DYNASTY / {data?.league.season ?? '2026'}</span><span className="live-dot" /><span className="live-label">LIVE DATA</span></div>
+        <a className="brand" href="#top" aria-label="Fantasy Playoffs home">
+          <span className="brand-mark" style={{ background: '#38bdf8', color: '#0a0b0d' }}>
+            <Trophy size={16} strokeWidth={2.5} />
+          </span>
+          <span>FANTASY<span className="brand-light">PLAYOFFS</span></span>
+        </a>
+        <div className="topbar-right">
+          <span className="season-label">{clinchSummary ? `${clinchSummary.season} SEASON` : 'DYNASTY / 2026'}</span>
+          <span className="live-dot" />
+          <span className="live-label">LIVE DATA</span>
+        </div>
       </header>
 
+      {/* Intro Header & League Bar */}
       <section className="intro" id="top">
-        <div><p className="eyebrow">PICK POSITION INTELLIGENCE <span>·</span> WEEK {currentWeek || '--'}</p><h1>Draft order, <em>in motion.</em></h1><p className="intro-copy">A live read on where the rookie picks are headed, shaped by every point, bye and roster move.</p></div>
+        <div>
+          <p className="eyebrow">
+            PLAYOFF CLINCH &amp; EXPECTED WINS <span>·</span> WEEK {clinchSummary?.currentWeek || '--'}
+          </p>
+          <h1>The Playoff Race, <em>Decoded.</em></h1>
+          <p className="intro-copy">
+            Exact magic numbers, clinch scenarios, and all-play expected wins — engineered with full weekly league median support.
+          </p>
+        </div>
+
         <div className="league-control">
           <label htmlFor="league-id">SLEEPER LEAGUE ID</label>
           <div className="league-input-row">
@@ -160,13 +320,21 @@ function App() {
               value={leagueId}
               onChange={(event) => setLeagueId(event.target.value)}
               onKeyDown={(event) => { if (event.key === 'Enter') void refresh() }}
-              placeholder="League ID"
+              placeholder="Enter League ID"
               aria-label="Sleeper League ID"
               inputMode="numeric"
               autoComplete="off"
-              autoCorrect="off"
               spellCheck={false}
             />
+            <button
+              type="button"
+              className="demo-button"
+              onClick={loadDemo}
+              title="Load realistic demo league with active median scoring"
+            >
+              <Sparkles size={13} />
+              <span>DEMO</span>
+            </button>
             <button
               type="button"
               className={`share-button ${copied ? 'copied' : ''}`}
@@ -181,55 +349,675 @@ function App() {
               className="refresh-button"
               onClick={() => void refresh()}
               disabled={busy || !leagueId.trim()}
-              title="Refresh live data"
+              title="Refresh live league data"
             >
               <RefreshCw size={14} className={busy ? 'spin' : ''} />
               <span>{busy ? 'UPDATING' : 'REFRESH'}</span>
             </button>
           </div>
           <div className="refresh-meta">
-            <Clock3 size={12} /> {lastUpdated ? `UPDATED ${new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · MANUAL REFRESH` : 'ENTER A SLEEPER LEAGUE ID AND CLICK REFRESH'}
+            <Clock3 size={12} />
+            {lastUpdated
+              ? `UPDATED ${new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · SLEEPER SYNC`
+              : 'ENTER A SLEEPER LEAGUE ID OR CLICK DEMO'}
           </div>
         </div>
       </section>
 
-      {error && <div className="error-banner"><CircleAlert size={16} /><span>Live data unavailable: {error}</span><button type="button" onClick={() => void refresh()}>Retry</button></div>}
+      {error && (
+        <div className="error-banner">
+          <CircleAlert size={16} />
+          <span>Live data unavailable: {error}</span>
+          <button type="button" onClick={() => void refresh()}>Retry</button>
+        </div>
+      )}
 
+      {/* Summary KPI Strip */}
       <section className="summary-strip" aria-label="League summary">
-        <div className="summary-item"><span className="summary-label">LEAGUE</span><strong>{data?.league.name ?? (busy ? 'Connecting…' : 'No league connected')}</strong><span className="summary-note">{data ? `${totalTeams} franchises · ${data.league.scoring_settings.rec ?? 0} PPR${data.league.scoring_settings.bonus_rec_te ? ` (+${data.league.scoring_settings.bonus_rec_te} TEP)` : ''}` : 'Enter a league ID above'}</span></div>
-        <div className="summary-item"><span className="summary-label">REGULAR SEASON</span><strong>WEEK {currentWeek || '--'} <span className="summary-muted">/ {regularSeasonEnd}</span></strong><span className="summary-note">{data ? 'Current week + remaining projections' : 'Awaiting league ID'}</span></div>
-        <div className="summary-item"><span className="summary-label">LOTTERY PICKS</span><strong>{data ? `01 — ${String(nonPlayoffCount).padStart(2, '0')}` : '—'}</strong><span className="summary-note">Reverse Max Points For</span></div>
+        <div className="summary-item">
+          <span className="summary-label">LEAGUE &amp; SCORING</span>
+          <strong>{clinchSummary?.leagueName ?? (busy ? 'Connecting…' : 'No league connected')}</strong>
+          <span className="summary-note">
+            {clinchSummary
+              ? `${totalTeams} Teams · ${hasMedian ? '⚡ League Median Active (2W/Wk)' : 'Head-to-Head (1W/Wk)'}`
+              : 'Enter a league ID above'}
+          </span>
+        </div>
+        <div className="summary-item">
+          <span className="summary-label">REGULAR SEASON PROGRESS</span>
+          <strong>
+            WEEK {clinchSummary?.currentWeek || '--'} <span className="summary-muted">/ {clinchSummary?.regularSeasonEnd ?? 14}</span>
+          </strong>
+          <span className="summary-note">
+            {clinchSummary
+              ? `${clinchSummary.remainingWeeks} weeks remaining (${clinchSummary.remainingGamesPerTeam} max wins left)`
+              : 'Awaiting league ID'}
+          </span>
+        </div>
+        <div className="summary-item">
+          <span className="summary-label">PLAYOFF BRACKET CUTOFF</span>
+          <strong>TOP {playoffSpots} QUALIFY</strong>
+          <span className="summary-note">
+            {clinchSummary
+              ? `${clinchSummary.clinchedCount} Clinched · ${clinchSummary.bubbleCount} In Hunt/Bubble · ${clinchSummary.eliminatedCount} Out`
+              : 'Top seeds advance'}
+          </span>
+        </div>
       </section>
 
+      {/* Navigation Tabs */}
       <section className="projection-section">
-        <div className="section-heading"><div><p className="eyebrow">THE BOARD <span>·</span> {data?.league.name.toUpperCase() ?? 'SLEEPER DYNASTY'}</p><h2>{view === 'assets' ? 'Traded pick assets' : 'Projected rookie order'}</h2></div><div className="board-tools"><div className="search-box"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Find a team" aria-label="Find a team" /></div><div className="view-tabs" role="tablist" aria-label="Board view"><button type="button" role="tab" aria-selected={view === 'order'} className={view === 'order' ? 'selected' : ''} onClick={() => setView('order')}>PICK ORDER</button><button type="button" role="tab" aria-selected={view === 'assets'} className={view === 'assets' ? 'selected' : ''} onClick={() => setView('assets')}>PICK ASSETS</button></div></div></div>
+        <div className="section-heading">
+          <div>
+            <p className="eyebrow">
+              INTELLIGENCE DASHBOARD <span>·</span> {clinchSummary?.leagueName.toUpperCase() ?? 'SLEEPER'}
+            </p>
+            <h2>
+              {tab === 'clinch' && 'Playoff Clinch Radar'}
+              {tab === 'expected' && 'Expected Wins & Schedule Luck'}
+              {tab === 'simulator' && 'Interactive What-If Playoff Machine'}
+              {tab === 'picks' && 'Dynasty Rookie Draft Assets'}
+            </h2>
+          </div>
 
-        {view === 'assets' ? <div className="table-wrap"><table><thead><tr><th>ORIGINAL PICK</th><th>CURRENT HOLDER</th><th>ROUND</th><th>SEASON</th><th>STATUS</th></tr></thead><tbody>
-          {data?.tradedPicks.filter((pick) => Number(pick.season) === Number(data.league.season) + 1).sort((a, b) => a.round - b.round || a.roster_id - b.roster_id).map((pick) => { const origin = data.rosters.find((roster) => roster.roster_id === pick.roster_id); const holder = data.rosters.find((roster) => roster.roster_id === pick.owner_id); return <tr className="asset-row" key={`${pick.season}-${pick.round}-${pick.roster_id}`}><td>{origin ? teamName(data, origin) : `Team ${pick.roster_id}`}</td><td className="holder-cell">{holder ? teamName(data, holder) : `Team ${pick.owner_id}`} {pick.round === 1 && <span className="asset-tag">LOTTERY TRACKED</span>}</td><td>ROUND {pick.round}</td><td>{pick.season}</td><td><span className="trade-mark"><ArrowUpRight size={13} /> TRADED</span></td></tr> })}
-          {data && <tr className="owned-picks-row"><td colSpan={5}>Unlisted picks remain with their original franchise. Sleeper is the source of truth for traded-pick ownership.</td></tr>}{!data && <tr><td colSpan={5} className="empty-cell">{busy ? 'Loading traded picks…' : 'Enter a Sleeper league ID above to see pick assets.'}</td></tr>}
-        </tbody></table></div> : <div className="table-wrap"><table><thead><tr><th className="rank-col">{view === 'order' ? 'PICK' : 'SEED'}</th><th>FRANCHISE</th>{view === 'order' && <th>{rookieYear} PICK HOLDER</th>}<th>CURRENT RECORD</th><th>{view === 'order' ? 'PICK ODDS' : 'PLAYOFF CHANCE'}</th><th>xPICK</th><th>PROJECTED MAX PF</th><th>CURRENT MAX PF</th></tr></thead><tbody>
-          {visiblePicks.map((team) => { const inLottery = team.pick <= nonPlayoffCount; const top = team.probabilities.map((chance, pick) => ({ pick: pick + 1, chance, range: team.probabilityRanges[pick] })).filter((outcome) => outcome.chance > 0).sort((a, b) => b.chance - a.chance || a.pick - b.pick).slice(0, 8); return <tr key={team.roster.roster_id} className={`${inLottery ? 'lottery-row' : 'playoff-row'} ${busy ? 'dim-row' : ''}`}>
-            <td className="rank-cell"><span className={inLottery ? 'pick-number lottery-number' : 'pick-number'}>{String(team.pick).padStart(2, '0')}</span></td>
-            <td className="franchise-cell"><span className="franchise-name" title={team.name}>{team.name}</span></td>
-            <td className="holder-cell" data-label={`${rookieYear} PICK HOLDER`} title={team.pickHolder}>{team.pickHolder}{team.pickHolderId !== team.roster.roster_id && <span className="asset-tag">TRADED</span>}</td>
-            <td className="record-cell"><span className="record-pill">{team.record}</span></td>
-            <td className="odds-cell-td"><div className="odds-cell">{top.map(({ pick: pickNumber, chance, range }) => <span className={`odds-pill ${pickNumber <= nonPlayoffCount ? 'odds-lottery' : ''}`} key={pickNumber}><b>{String(pickNumber).padStart(2, '0')}</b><span>{formatChance(chance)}</span><small>{formatChance(range.low)}–{formatChance(range.high)}</small></span>)}</div></td>
-            <td className="numeric-cell xpick-cell"><span className={`xpick-pill ${inLottery ? 'xpick-lottery' : ''}`}>{team.expectedPick.toFixed(1)}</span></td>
-            <td className="numeric-cell proj-maxpf-cell">{formatNumber(team.maxPf)}</td>
-            <td className="numeric-cell curr-maxpf-cell">{formatNumber(team.currentMaxPf)}</td>
-          </tr> })}
-          {!data && <tr><td colSpan={8} className="empty-cell">{busy ? <><RefreshCw size={16} className="spin" /> Loading live league data…</> : <div className="empty-league-prompt"><p>Enter your Sleeper League ID above to generate live draft pick projections.</p></div>}</td></tr>}{data && visiblePicks.length === 0 && <tr><td colSpan={8} className="empty-cell">No teams match “{search}”.</td></tr>}
-        </tbody></table></div>}
+          <div className="board-tools">
+            {tab !== 'simulator' && (
+              <div className="search-box">
+                <Search size={15} />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Find team or owner"
+                  aria-label="Find team"
+                />
+              </div>
+            )}
+            <div className="view-tabs" role="tablist" aria-label="Board view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'clinch'}
+                className={tab === 'clinch' ? 'selected' : ''}
+                onClick={() => setTab('clinch')}
+              >
+                CLINCH RADAR
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'expected'}
+                className={tab === 'expected' ? 'selected' : ''}
+                onClick={() => setTab('expected')}
+              >
+                EXPECTED WINS
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'simulator'}
+                className={tab === 'simulator' ? 'selected' : ''}
+                onClick={() => setTab('simulator')}
+              >
+                WHAT-IF MACHINE
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'picks'}
+                className={tab === 'picks' ? 'selected' : ''}
+                onClick={() => setTab('picks')}
+              >
+                DRAFT PICKS
+              </button>
+            </div>
+          </div>
+        </div>
 
-        <footer className="table-footer"><div className="legend"><span><i className="legend-dot lottery-dot" /> 01—{String(nonPlayoffCount).padStart(2, '0')} REVERSE MAX PF</span><span><i className="legend-dot playoff-dot" /> PLAYOFF SEED</span><span><ShieldCheck size={14} /> INJURY + BYE ADJUSTED</span></div><span className="simulation-note">{picks.length ? `${picks.length} TEAMS · ${picks[0]?.modelNames.length ?? 13} ENGINES · ${(picks[0]?.simulationCount ?? 6000).toLocaleString('en-US')} SEASONS + EXACT MATH` : 'SIMULATIONS WILL APPEAR WHEN DATA LOADS'}</span></footer>
+        {/* Filter pills on clinch view */}
+        {tab === 'clinch' && (
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '8px' }}>
+            <span style={{ font: '600 10px var(--mono)', color: 'var(--muted)', marginRight: '6px' }}>FILTER:</span>
+            <button
+              type="button"
+              className={`filter-tab ${filter === 'ALL' ? 'selected' : ''}`}
+              onClick={() => setFilter('ALL')}
+            >
+              ALL TEAMS ({clinchSummary?.teams.length ?? 0})
+            </button>
+            <button
+              type="button"
+              className={`filter-tab ${filter === 'CLINCHED' ? 'selected' : ''}`}
+              onClick={() => setFilter('CLINCHED')}
+            >
+              🔒 CLINCHED ({clinchSummary?.clinchedCount ?? 0})
+            </button>
+            <button
+              type="button"
+              className={`filter-tab ${filter === 'BUBBLE' ? 'selected' : ''}`}
+              onClick={() => setFilter('BUBBLE')}
+            >
+              ⚡ IN THE HUNT ({clinchSummary?.bubbleCount ?? 0})
+            </button>
+            <button
+              type="button"
+              className={`filter-tab ${filter === 'ELIMINATED' ? 'selected' : ''}`}
+              onClick={() => setFilter('ELIMINATED')}
+            >
+              ✕ ELIMINATED ({clinchSummary?.eliminatedCount ?? 0})
+            </button>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 1: CLINCH RADAR TABLE                                     */}
+        {/* ------------------------------------------------------------- */}
+        {tab === 'clinch' && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th className="rank-col">SEED</th>
+                  <th>FRANCHISE</th>
+                  <th>RECORD</th>
+                  <th>CLINCH STATUS</th>
+                  <th>CLINCH METER</th>
+                  <th>MAGIC #</th>
+                  <th>ELIM #</th>
+                  <th>PLAYOFF ODDS</th>
+                  <th>POINTS FOR</th>
+                  <th>SCENARIOS</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTeams.map((team) => {
+                  const isCutoffLine = team.seed === playoffSpots && filter === 'ALL'
+                  const isExpanded = expandedRosterId === team.rosterId
+
+                  return (
+                    <Fragment key={team.rosterId}>
+                      <tr
+                        className={`clickable-row ${team.seed <= playoffSpots ? 'playoff-row' : 'lottery-row'}`}
+                        onClick={() => setExpandedRosterId(isExpanded ? null : team.rosterId)}
+                      >
+                      <td className="rank-cell">
+                        <span className={`pick-number ${team.seed <= playoffSpots ? '' : 'lottery-number'}`}>
+                          {String(team.seed).padStart(2, '0')}
+                        </span>
+                      </td>
+
+                      <td className="franchise-cell">
+                        <span className="franchise-name" title={team.name}>{team.name}</span>
+                        <small style={{ color: 'var(--muted)', fontSize: '10px' }}>{team.ownerDisplayName}</small>
+                      </td>
+
+                      <td className="record-cell">
+                        <span className="record-pill">
+                          <b>{team.totalWins}–{team.totalLosses}{team.totalTies ? `–${team.totalTies}` : ''}</b>
+                        </span>
+                        {hasMedian && (
+                          <span className="record-sub">
+                            {team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med
+                          </span>
+                        )}
+                      </td>
+
+                      <td>{renderStatusBadge(team.status, team.statusLabel)}</td>
+
+                      <td className="meter-cell">{renderClinchMeter(team.clinchMeter, team.status)}</td>
+
+                      <td>
+                        {team.magicNumber === 0 ? (
+                          <span className="magic-pill magic-lock"><Lock size={11} /> LOCK</span>
+                        ) : team.magicNumber !== null ? (
+                          <span className={`magic-pill ${team.magicNumber <= (hasMedian ? 4 : 2) ? 'magic-active' : 'magic-far'}`}>
+                            M: {team.magicNumber}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--muted)' }}>—</span>
+                        )}
+                      </td>
+
+                      <td>
+                        {team.eliminationNumber === 0 ? (
+                          <span className="magic-pill elim-out">OUT</span>
+                        ) : team.eliminationNumber !== null ? (
+                          <span className={`magic-pill ${team.eliminationNumber <= (hasMedian ? 4 : 2) ? 'elim-danger' : 'magic-far'}`}>
+                            E: {team.eliminationNumber}
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--muted)' }}>—</span>
+                        )}
+                      </td>
+
+                      <td className="numeric-cell">
+                        <b style={{ color: team.playoffProbability >= 0.75 ? '#34d399' : team.playoffProbability <= 0.1 ? '#94a3b8' : '#38bdf8' }}>
+                          {formatPct(team.playoffProbability)}
+                        </b>
+                      </td>
+
+                      <td className="numeric-cell">{formatNumber(team.pointsFor)}</td>
+
+                      <td>
+                        <span className={`expand-toggle ${isExpanded ? 'open' : ''}`}>
+                          <ChevronRight size={16} />
+                        </span>
+                      </td>
+                    </tr>
+                    {isCutoffLine && (
+                      <tr className="playoff-cutoff-line">
+                        <td colSpan={10}>
+                          ▲ TOP {playoffSpots} QUALIFY FOR PLAYOFFS &nbsp;|&nbsp; BUBBLE CUTOFF LINE ▼
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+
+                {!data && (
+                  <tr>
+                    <td colSpan={10} className="empty-cell">
+                      {busy ? <><RefreshCw size={16} className="spin" /> Calculating playoff clinch models…</> : 'Enter a Sleeper league ID above or click DEMO.'}
+                    </td>
+                  </tr>
+                )}
+                {data && filteredTeams.length === 0 && (
+                  <tr>
+                    <td colSpan={10} className="empty-cell">No teams match your filter.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Expanded Drawer Details (if any selected) */}
+        {tab === 'clinch' && expandedRosterId !== null && (() => {
+          const team = clinchSummary?.teams.find((t) => t.rosterId === expandedRosterId)
+          if (!team) return null
+          return (
+            <div className="drawer-card" style={{ marginTop: '16px', background: 'var(--surface-raised)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                <h3 style={{ margin: 0, font: '600 16px var(--display)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Target size={16} color="#38bdf8" /> Clinch Path Analysis: {team.name} (Seed #{team.seed})
+                </h3>
+                <button
+                  type="button"
+                  style={{ background: 'transparent', border: 0, color: 'var(--muted)', cursor: 'pointer', fontSize: '12px' }}
+                  onClick={() => setExpandedRosterId(null)}
+                >
+                  Close ✕
+                </button>
+              </div>
+
+              <div className="drawer-content" style={{ padding: 0 }}>
+                {/* Clinch Paths */}
+                <div>
+                  <h4 style={{ color: '#34d399', fontSize: '13px', margin: '0 0 8px' }}>
+                    <ShieldCheck size={14} /> Clinching Scenarios (This Week)
+                  </h4>
+                  {team.clinchThisWeekScenarios.length > 0 ? (
+                    <ul className="drawer-scenarios">
+                      {team.clinchThisWeekScenarios.map((s, i) => (
+                        <li key={i} className="clinch-scenario"><Check size={14} /> <span>{s}</span></li>
+                      ))}
+                    </ul>
+                  ) : team.status === 'CLINCHED_PLAYOFF' || team.status === 'CLINCHED_BYE' ? (
+                    <p style={{ color: '#34d399', fontSize: '12px', margin: 0 }}>
+                      🎉 <b>CLINCHED!</b> This team has mathematically secured a playoff spot and cannot be passed by enough teams to miss.
+                    </p>
+                  ) : team.status === 'ELIMINATED' ? (
+                    <p style={{ color: '#94a3b8', fontSize: '12px', margin: 0 }}>
+                      Mathematically eliminated from contention.
+                    </p>
+                  ) : (
+                    <p style={{ color: 'var(--muted)', fontSize: '12px', margin: 0 }}>
+                      Cannot mathematically clinch this week. Wins this week will reduce their Magic Number for Week {(clinchSummary?.currentWeek ?? 1) + 1}.
+                    </p>
+                  )}
+
+                  {/* Elimination Threat */}
+                  {team.eliminatedThisWeekScenarios.length > 0 && (
+                    <div style={{ marginTop: '14px' }}>
+                      <h4 style={{ color: '#f87171', fontSize: '13px', margin: '0 0 8px' }}>
+                        <ShieldAlert size={14} /> Elimination Threat (This Week)
+                      </h4>
+                      <ul className="drawer-scenarios">
+                        {team.eliminatedThisWeekScenarios.map((s, i) => (
+                          <li key={i} className="elim-scenario">✕ <span>{s}</span></li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {/* Performance & Median Breakdown */}
+                <div>
+                  <h4 style={{ color: '#38bdf8', fontSize: '13px', margin: '0 0 8px' }}>
+                    <Award size={14} /> Performance &amp; Schedule Breakdown
+                  </h4>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', fontSize: '11.5px' }}>
+                    <div style={{ background: 'var(--surface)', padding: '8px 10px', borderRadius: '4px' }}>
+                      <span style={{ color: 'var(--muted)', display: 'block', fontSize: '9px' }}>ALL-PLAY EXPECTED WINS</span>
+                      <strong style={{ fontSize: '14px' }}>{team.expectedWins.toFixed(1)}</strong> ({Math.round(team.allPlayPercentage * 100)}% Win Rate)
+                    </div>
+                    <div style={{ background: 'var(--surface)', padding: '8px 10px', borderRadius: '4px' }}>
+                      <span style={{ color: 'var(--muted)', display: 'block', fontSize: '9px' }}>SCHEDULE LUCK FACTOR</span>
+                      <strong style={{ fontSize: '14px' }}>{renderLuck(team.scheduleLuck)}</strong>
+                    </div>
+                    {hasMedian && (
+                      <div style={{ background: 'var(--surface)', padding: '8px 10px', borderRadius: '4px', gridColumn: 'span 2' }}>
+                        <span style={{ color: 'var(--muted)', display: 'block', fontSize: '9px' }}>MEDIAN RECORD BREAKDOWN</span>
+                        <strong style={{ fontSize: '13px' }}>{team.medianWins} Wins – {team.medianLosses} Losses</strong> vs. League Scoring Median
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 2: EXPECTED WINS & SCHEDULE LUCK MATRIX                    */}
+        {/* ------------------------------------------------------------- */}
+        {tab === 'expected' && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th className="rank-col">RANK</th>
+                  <th>FRANCHISE</th>
+                  <th>ACTUAL RECORD</th>
+                  <th>ALL-PLAY EXPECTED WINS</th>
+                  <th>SCHEDULE LUCK</th>
+                  <th>ALL-PLAY %</th>
+                  <th>MEDIAN RECORD</th>
+                  <th>POINTS FOR</th>
+                  <th>POINTS AGAINST</th>
+                  <th>VERDICT</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTeams.map((team, idx) => {
+                  const luck = team.scheduleLuck
+                  let verdict = 'Fair Schedule'
+                  if (luck >= 2.0) verdict = '🍀 Highly Lucky'
+                  else if (luck >= 1.0) verdict = 'Lucky Schedule'
+                  else if (luck <= -2.0) verdict = '🔥 Brutal Bad Luck'
+                  else if (luck <= -1.0) verdict = 'Unlucky Schedule'
+
+                  return (
+                    <tr key={team.rosterId} className={team.seed <= playoffSpots ? 'playoff-row' : 'lottery-row'}>
+                      <td className="rank-cell">
+                        <span className={`pick-number ${team.seed <= playoffSpots ? '' : 'lottery-number'}`}>
+                          {String(idx + 1).padStart(2, '0')}
+                        </span>
+                      </td>
+
+                      <td className="franchise-cell">
+                        <span className="franchise-name" title={team.name}>{team.name}</span>
+                        <small style={{ color: 'var(--muted)', fontSize: '10px' }}>{team.ownerDisplayName}</small>
+                      </td>
+
+                      <td className="record-cell">
+                        <span className="record-pill">
+                          <b>{team.totalWins}–{team.totalLosses}</b>
+                        </span>
+                      </td>
+
+                      <td className="numeric-cell" style={{ fontWeight: 600 }}>
+                        {team.expectedWins.toFixed(1)} W
+                      </td>
+
+                      <td>{renderLuck(team.scheduleLuck)}</td>
+
+                      <td className="numeric-cell">
+                        {Math.round(team.allPlayPercentage * 100)}%
+                      </td>
+
+                      <td className="record-cell">
+                        {hasMedian ? (
+                          <span className="record-pill">
+                            {team.medianWins}–{team.medianLosses} ({Math.round((team.medianWins / Math.max(1, team.medianWins + team.medianLosses)) * 100)}%)
+                          </span>
+                        ) : (
+                          <span style={{ color: 'var(--muted)' }}>N/A</span>
+                        )}
+                      </td>
+
+                      <td className="numeric-cell">{formatNumber(team.pointsFor)}</td>
+                      <td className="numeric-cell" style={{ color: 'var(--muted)' }}>{formatNumber(team.pointsAgainst)}</td>
+
+                      <td>
+                        <span style={{ font: '600 10.5px var(--mono)', color: luck > 0 ? '#4ade80' : luck < 0 ? '#fb7185' : 'var(--muted)' }}>
+                          {verdict}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 3: INTERACTIVE WHAT-IF PLAYOFF MACHINE                    */}
+        {/* ------------------------------------------------------------- */}
+        {tab === 'simulator' && (
+          <div className="simulator-wrap">
+            <div className="sim-controls-header">
+              <div>
+                <strong style={{ font: '600 15px var(--display)' }}>Playoff Scenario Simulator</strong>
+                <p style={{ margin: '3px 0 0', color: 'var(--muted)', fontSize: '12px' }}>
+                  Click remaining matchup winners (and median beats) to test clinching paths and see live standings recalculate.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="refresh-button"
+                onClick={handleResetSim}
+                title="Reset simulation overrides"
+              >
+                <RotateCcw size={13} />
+                <span>RESET PICKS</span>
+              </button>
+            </div>
+
+            {/* Live Standings Simulator Bar */}
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>PROJECTED SEED</th>
+                    <th>FRANCHISE</th>
+                    <th>PROJECTED WINS</th>
+                    <th>ORIGINAL WINS</th>
+                    <th>STATUS AFTER PICKS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {simulatedTeams.map((team, idx) => {
+                    const isPlayoff = idx < playoffSpots
+                    return (
+                      <tr key={team.rosterId} className={isPlayoff ? 'playoff-row' : 'lottery-row'}>
+                        <td className="rank-cell">
+                          <span className={`pick-number ${isPlayoff ? '' : 'lottery-number'}`}>
+                            {String(idx + 1).padStart(2, '0')}
+                          </span>
+                        </td>
+                        <td className="franchise-cell">
+                          <span className="franchise-name">{team.name}</span>
+                        </td>
+                        <td className="numeric-cell">
+                          <b style={{ color: team.addedWins > 0 ? '#34d399' : 'var(--ink)' }}>
+                            {team.simTotalWins} Wins {team.addedWins > 0 ? `(+${team.addedWins})` : ''}
+                          </b>
+                        </td>
+                        <td className="numeric-cell" style={{ color: 'var(--muted)' }}>
+                          {team.totalWins} Wins
+                        </td>
+                        <td>
+                          {isPlayoff ? (
+                            <span className="status-pill status-clinched-playoff"><Check size={11} /> Playoff Seed #{idx + 1}</span>
+                          ) : (
+                            <span className="status-pill status-eliminated">Out of Playoff Field</span>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Upcoming Matchup Cards */}
+            <div className="sim-week-grid">
+              {Array.from({ length: Math.min(3, clinchSummary?.remainingWeeks ?? 0) }, (_, i) => {
+                const weekNum = (clinchSummary?.currentWeek ?? 1) + i
+                const weekFeed = data?.weeks[weekNum]
+                const matchups = weekFeed?.matchups || []
+
+                // Group matchups by matchup_id
+                const pairs = new Map<number, typeof matchups>()
+                for (const m of matchups) {
+                  if (m.matchup_id != null) {
+                    const list = pairs.get(m.matchup_id) || []
+                    list.push(m)
+                    pairs.set(m.matchup_id, list)
+                  }
+                }
+
+                return (
+                  <div key={weekNum} className="sim-week-card">
+                    <h4 className="sim-week-title">
+                      <span>WEEK {weekNum} MATCHUPS</span>
+                      <span style={{ fontSize: '10px', color: 'var(--muted)' }}>{pairs.size} Head-to-Head Games</span>
+                    </h4>
+
+                    {Array.from(pairs.entries()).map(([matchupId, pair]) => {
+                      if (pair.length < 2) return null
+                      const t1 = clinchSummary?.teams.find((t) => t.rosterId === pair[0].roster_id)
+                      const t2 = clinchSummary?.teams.find((t) => t.rosterId === pair[1].roster_id)
+                      if (!t1 || !t2) return null
+
+                      const pickedWinner = simMatchupWinners[weekNum]?.[matchupId]
+
+                      return (
+                        <div key={matchupId} className="sim-matchup-row">
+                          <div className="sim-matchup-teams">
+                            <button
+                              type="button"
+                              className={`sim-team-btn ${pickedWinner === t1.rosterId ? 'picked-win' : ''}`}
+                              onClick={() => handlePickWinner(weekNum, matchupId, t1.rosterId)}
+                            >
+                              <span>{t1.name}</span>
+                              {pickedWinner === t1.rosterId && <Check size={12} />}
+                            </button>
+                            <span className="sim-vs">VS</span>
+                            <button
+                              type="button"
+                              className={`sim-team-btn ${pickedWinner === t2.rosterId ? 'picked-win' : ''}`}
+                              onClick={() => handlePickWinner(weekNum, matchupId, t2.rosterId)}
+                            >
+                              <span>{t2.name}</span>
+                              {pickedWinner === t2.rosterId && <Check size={12} />}
+                            </button>
+                          </div>
+
+                          {hasMedian && (
+                            <div className="sim-median-toggle">
+                              <span>BEATS MEDIAN:</span>
+                              <div style={{ display: 'flex', gap: '6px' }}>
+                                <button
+                                  type="button"
+                                  className={`sim-median-btn ${simMedianWinners[weekNum]?.[t1.rosterId] ? 'active' : ''}`}
+                                  onClick={() => handleToggleMedian(weekNum, t1.rosterId)}
+                                >
+                                  {t1.name.slice(0, 8)}: +1W
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`sim-median-btn ${simMedianWinners[weekNum]?.[t2.rosterId] ? 'active' : ''}`}
+                                  onClick={() => handleToggleMedian(weekNum, t2.rosterId)}
+                                >
+                                  {t2.name.slice(0, 8)}: +1W
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 4: DYNASTY DRAFT PICKS                                     */}
+        {/* ------------------------------------------------------------- */}
+        {tab === 'picks' && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th className="rank-col">PICK</th>
+                  <th>ORIGINAL FRANCHISE</th>
+                  <th>PICK HOLDER</th>
+                  <th>RECORD</th>
+                  <th>PROJECTED MAX PF</th>
+                  <th>CURRENT MAX PF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {picks.map((team) => (
+                  <tr key={team.roster.roster_id} className={team.pick <= (totalTeams - playoffSpots) ? 'lottery-row' : 'playoff-row'}>
+                    <td className="rank-cell">
+                      <span className={`pick-number ${team.pick <= (totalTeams - playoffSpots) ? 'lottery-number' : ''}`}>
+                        {String(team.pick).padStart(2, '0')}
+                      </span>
+                    </td>
+                    <td className="franchise-cell">
+                      <span className="franchise-name">{team.name}</span>
+                    </td>
+                    <td className="holder-cell">
+                      {team.pickHolder} {team.pickHolderId !== team.roster.roster_id && <span className="asset-tag">TRADED</span>}
+                    </td>
+                    <td className="record-cell">
+                      <span className="record-pill">{team.record}</span>
+                    </td>
+                    <td className="numeric-cell">{formatNumber(team.maxPf)}</td>
+                    <td className="numeric-cell">{formatNumber(team.currentMaxPf)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <footer className="table-footer">
+          <div className="legend">
+            <span><i className="legend-dot playoff-dot" /> SEEDS 1–{playoffSpots} PLAYOFF QUALIFIED</span>
+            <span><i className="legend-dot lottery-dot" /> SEEDS {playoffSpots + 1}–{totalTeams} ELIMINATION / LOTTERY</span>
+            <span><ShieldCheck size={14} /> LEAGUE MEDIAN SUPPORT ACTIVE</span>
+          </div>
+          <span className="simulation-note">
+            {totalTeams} TEAMS · {hasMedian ? '2 WINS PER WEEK (H2H + MEDIAN)' : '1 WIN PER WEEK'} · EXACT CLINCH MATH
+          </span>
+        </footer>
       </section>
 
-      <details className="model-details" open>
+      {/* Educational Accordion */}
+      <details className="model-details" open style={{ marginTop: '36px' }}>
         <summary>
-          <span className="method-icon"><Trophy size={18} /></span>
+          <span className="method-icon"><HelpCircle size={18} /></span>
           <div className="model-heading">
-            <span className="model-tag">HOW IT WORKS</span>
-            <strong>How draft pick odds are calculated</strong>
+            <span className="model-tag">ANALYTICS GUIDE</span>
+            <strong>How Playoff Clinch Math &amp; League Median Work</strong>
           </div>
           <ChevronDown className="model-chevron" size={17} />
         </summary>
@@ -237,360 +1025,36 @@ function App() {
           <div className="model-cards-grid">
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">LEAGUE SCORING</span>
-                <h4>1. Exact League Settings &amp; Live Tracking</h4>
+                <span className="model-card-tag">MAGIC NUMBER (M)</span>
+                <h4>Clinching Mathematical Locks</h4>
               </div>
               <p>
-                Weekly projections from Sleeper are converted using {data && scoringSummary ? `this league's exact rules (${scoringSummary})` : "this league's exact rules"}.
-                {hasMilestoneBonuses
-                  ? ' Big-play bonuses (like 100-yard rushing/receiving or 300-yard passing milestones) are calculated using upper-tail probabilities under continuous '
-                  : ' Standard yardage and touchdown scoring apply without milestone bonuses. '}{' '}
-                {hasMilestoneBonuses ? <a href="https://en.wikipedia.org/wiki/Gamma_distribution" target="_blank" rel="noopener noreferrer">Gamma distribution</a> : null}{hasMilestoneBonuses ? ' curves. ' : ''}
-                Completed games lock in actual player scores permanently. Games currently in progress project remaining stats based on time left on the clock, while future games simulate full-game outcomes.
+                A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #{playoffSpots + 1}) to catch them. The <b>Magic Number</b> represents the combination of your wins and chaser losses required to lock the spot. When $M = 0$, you are officially locked!
               </p>
             </div>
 
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">ANTI-TANKING</span>
-                <h4>2. Max PF (Why Benching Stars Doesn't Work)</h4>
+                <span className="model-card-tag">LEAGUE MEDIAN</span>
+                <h4>Two Games Every Week</h4>
               </div>
               <p>
-                In dynasty leagues, rookie draft order for non-playoff teams is decided by <strong>Max Points For (Max PF)</strong>, not win-loss record.
-              </p>
-              <p>
-                Every week, the system looks at every single player on your roster—including your bench and taxi squad—and calculates the highest score you could have possibly posted in 20/20 hindsight (using <a href="https://en.wikipedia.org/wiki/Transversal_matroid" target="_blank" rel="noopener noreferrer">transversal matroid matching</a>). Benching your studs to intentionally lose matchups will never lower your Max PF or help your draft position.
+                In leagues using median scoring (<code>league_average_match: 1</code>), each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league. This doubles the total regular-season games and accelerates clinching or elimination races.
               </p>
             </div>
 
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">SCHEDULE SIMULATION</span>
-                <h4>3. Remaining Matchups &amp; {data ? (hasMedianMatch ? 'Median Games' : 'Standings') : 'Standings'}</h4>
+                <span className="model-card-tag">EXPECTED WINS (xW)</span>
+                <h4>All-Play Schedule Luck</h4>
               </div>
               <p>
-                Official Sleeper records through completed weeks are locked in. The current week updates live as real NFL games finish. For all remaining weeks, the engine simulates every scheduled head-to-head matchup{hasMedianMatch ? ' and weekly league median game' : ''} across every simulated season, with simulated starter points breaking any ties in the standings.
-              </p>
-            </div>
-
-            <div className="model-card">
-              <div className="model-card-header">
-                <span className="model-card-tag">DRAFT ORDER RULES</span>
-                <h4>4. Lottery Picks vs. Playoff Picks</h4>
-              </div>
-              {data ? (
-                <p>
-                  Draft order locks at the end of the fantasy regular season (playoff matchups do not affect rookie picks):
-                  {nonPlayoffCount > 0 ? (
-                    <>
-                      <br />
-                      <strong>• Non-playoff teams (Lottery Picks 01–{String(nonPlayoffCount).padStart(2, '0')}):</strong> Ranked strictly from lowest regular-season Max PF to highest. The lowest-scoring non-playoff team gets the #1 overall pick.
-                    </>
-                  ) : ''}
-                  {playoffTeamsCount > 0 ? (
-                    <>
-                      <br />
-                      <strong>• Playoff teams (Picks {String(nonPlayoffCount + 1).padStart(2, '0')}–{String(totalTeams).padStart(2, '0')}):</strong> Ranked in reverse order of regular-season finish (the last playoff seed gets Pick {String(nonPlayoffCount + 1).padStart(2, '0')}, while the #1 regular-season seed picks last at Pick {String(totalTeams).padStart(2, '0')}).
-                    </>
-                  ) : ''}
-                </p>
-              ) : (
-                <p>
-                  Draft order locks at the end of the fantasy regular season. Non-playoff teams receive lottery picks ordered strictly by lowest regular-season Max PF. Playoff qualifiers receive post-lottery picks ordered in reverse of regular-season finish.
-                </p>
-              )}
-            </div>
-
-            <div className="model-card full-width">
-              <div className="model-card-header">
-                <span className="model-card-tag">SIMULATION ENGINES</span>
-                <h4>5. The 13 Simulation Realities (6,000 Simulated Seasons + Exact Math)</h4>
-              </div>
-              <p>
-                To avoid guessing or relying on any single formula, draft odds are simulated across <strong>13 distinct fantasy football scenarios</strong> (12 <a href="https://en.wikipedia.org/wiki/Monte_Carlo_method" target="_blank" rel="noopener noreferrer">Monte Carlo</a> models running 500 full remaining regular seasons each = 6,000 trials, plus an exact mathematical engine):
-              </p>
-              <div className="model-engine-list">
-                <div className="model-engine-item">
-                  <strong>1. Standard Game-Day Scoring:</strong>
-                  Realistic point curves for every position (QB, RB, WR, TE) tied to team offensive output.
-                </div>
-                <div className="model-engine-item">
-                  <strong>2. Boom / Bust Weeks:</strong>
-                  Models wild blowouts, garbage-time spikes, and games where stars get game-scripted out.
-                </div>
-                <div className="model-engine-item">
-                  <strong>3. Real NFL Game Logs:</strong>
-                  Samples directly from games players have actually played this season to ground projections in reality.
-                </div>
-                <div className="model-engine-item">
-                  <strong>4. Hot Streaks &amp; Lineup Smarts:</strong>
-                  Weights recent multi-week momentum and rewards managers who consistently start their highest scorers using <a href="https://en.wikipedia.org/wiki/Empirical_Bayes_method" target="_blank" rel="noopener noreferrer">Empirical Bayes</a> shrinkage.
-                </div>
-                <div className="model-engine-item">
-                  <strong>5. Late-Season Wear &amp; Tear (1.5&times; Injuries):</strong>
-                  Stress-tests rosters with an above-average injury rate to see whose bench depth survives into winter.
-                </div>
-                <div className="model-engine-item">
-                  <strong>6. Injury Crisis &amp; Chaos (2.0&times; Injuries):</strong>
-                  Simulates a worst-case injury bug where multiple starters go down, testing true roster depth.
-                </div>
-                <div className="model-engine-item">
-                  <strong>7. Shootouts &amp; Team Stacks:</strong>
-                  Simulates high-scoring 40-point shootouts where quarterbacks and their pass-catchers erupt together.
-                </div>
-                <div className="model-engine-item">
-                  <strong>8. Late-Season Rookie Surges:</strong>
-                  Accounts for rookies and young prospects earning bigger roles and snap counts down the stretch.
-                </div>
-                <div className="model-engine-item">
-                  <strong>9. Safe Chalk &amp; Low Variance:</strong>
-                  A predictable, low-volatility scenario where star players reliably hit their projected baselines.
-                </div>
-                <div className="model-engine-item">
-                  <strong>10. Contender vs. Rebuilder Tactics:</strong>
-                  Reflects real dynasty behavior—contenders lean on veteran floors, while rebuilders test young talent.
-                </div>
-                <div className="model-engine-item">
-                  <strong>11. Monster Outlier Booms:</strong>
-                  Captures legendary 40+ point ceiling games alongside sudden in-game exits (hamstrings, early injuries).
-                </div>
-                <div className="model-engine-item">
-                  <strong>12. Backup QB Downgrades:</strong>
-                  When a starting quarterback misses time, their wide receivers and tight ends take a realistic efficiency hit.
-                </div>
-                <div className="model-engine-item">
-                  <strong>13. Pure Matchup Math:</strong>
-                  Calculates exact mathematical win probabilities for every matchup and median game without simulation randomness using <a href="https://en.wikipedia.org/wiki/Poisson_binomial_distribution" target="_blank" rel="noopener noreferrer">Poisson-Binomial convolutions</a> and <a href="https://en.wikipedia.org/wiki/Normal_distribution#Cumulative_distribution_function" target="_blank" rel="noopener noreferrer">Gaussian CDF integrals</a>.
-                </div>
-              </div>
-              <p style={{ marginTop: '10px' }}>
-                <strong>How to Read the Pick Chips:</strong> The large percentage on each pick chip is the <strong>consensus probability</strong> across all 13 engines (balanced via <a href="https://en.wikipedia.org/wiki/Sinkhorn%27s_theorem" target="_blank" rel="noopener noreferrer">Sinkhorn-Knopp matrix scaling</a> onto the <a href="https://en.wikipedia.org/wiki/Doubly_stochastic_matrix" target="_blank" rel="noopener noreferrer">Birkhoff polytope</a> so every pick slot and every team sums to exactly 100%). The small range underneath (e.g. <code>75%–87%</code>) is the <strong>range of outcomes</strong>—the lowest and highest probability found across the 13 different simulation scenarios.
-              </p>
-            </div>
-
-            <div className="model-card">
-              <div className="model-card-header">
-                <span className="model-card-tag">ROSTER DURABILITY</span>
-                <h4>6. Bench Depth &amp; Injury Survival</h4>
-              </div>
-              <p>
-                Real fantasy seasons are decided by injuries. In our simulations, players face realistic injury odds governed by position-calibrated <a href="https://en.wikipedia.org/wiki/Markov_chain" target="_blank" rel="noopener noreferrer">Markov chains</a>: <strong>Running Backs (~4.6%)</strong>, <strong>Tight Ends (~3.6%)</strong>, <strong>Wide Receivers (~3.3%)</strong>, and <strong>Quarterbacks (~2.2%)</strong> per game, with existing injuries taking realistic time to heal.
-              </p>
-              <p>
-                When a starter is sidelined, your highest-scoring bench player immediately steps up in both weekly matchups and Max PF calculations.
-              </p>
-              <p>
-                This reveals the huge difference between deep rosters and top-heavy teams: fragile rosters suffer devastating scoring drops when stars miss time, losing matchups and tumbling down the standings, while deep benches insulate lineups and keep scoring high all season long.
-              </p>
-            </div>
-
-            {data && nonPlayoffCount > 0 && playoffTeamsCount > 0 ? (
-              <div className="model-card">
-                <div className="model-card-header">
-                  <span className="model-card-tag">SEEDING LOGIC</span>
-                  <h4>7. The Playoff Bubble (Pick {String(nonPlayoffCount).padStart(2, '0')} vs. Pick {String(nonPlayoffCount + 1).padStart(2, '0')})</h4>
-                </div>
-                <p>
-                  Why do bubble teams often have higher odds for Pick {String(nonPlayoffCount + 1).padStart(2, '0')} than Pick {String(nonPlayoffCount).padStart(2, '0')}?
-                </p>
-                <p>
-                  Pick {String(nonPlayoffCount + 1).padStart(2, '0')} is awarded to the last playoff seed (Seed #{playoffTeamsCount}). If a bubble team goes on a hot winning streak down the stretch ({remainingGames} total matchups with medians over the final {remainingWeeks} weeks), those wins vault them into the playoffs, locking them into Pick {String(nonPlayoffCount + 1).padStart(2, '0')}.
-                </p>
-                <p>
-                  To land Pick {String(nonPlayoffCount).padStart(2, '0')} instead, that team must score enough points all season to have the highest Max PF of any lottery team, but still somehow lose enough games to miss the playoffs. Because high scoring naturally produces matchup wins, high-scoring teams usually make the playoffs instead of finishing in the top lottery slot.
-                </p>
-              </div>
-            ) : null}
-
-            <div className={`model-card ${(!data || nonPlayoffCount === 0 || playoffTeamsCount === 0) ? 'full-width' : ''}`}>
-              <div className="model-card-header">
-                <span className="model-card-tag">DRAFT CAPITAL</span>
-                <h4>{data && nonPlayoffCount > 0 && playoffTeamsCount > 0 ? '8. Expected Pick (xPick) & Traded Picks' : '7. Expected Pick (xPick) & Traded Picks'}</h4>
-              </div>
-              <p>
-                <strong>Expected Pick (xPick):</strong> Think of xPick as a team's single "average draft slot"—the discrete <a href="https://en.wikipedia.org/wiki/Expected_value" target="_blank" rel="noopener noreferrer">Expected Value</a> of their draft position. For example, an xPick of <code>1.4</code> means a team is almost guaranteed the 1st or 2nd pick. An xPick of <code>6.8</code> means they are hovering right on the playoff bubble between Pick {String(nonPlayoffCount).padStart(2, '0')} and Pick {String(nonPlayoffCount + 1).padStart(2, '0')}.
-              </p>
-              <p>
-                <strong>Traded Pick Tracking:</strong> All draft pick trades are pulled live from Sleeper. If Team A traded away their 1st-round pick to Team B, the draft slot is decided by where Team A finishes, but ownership of the pick is awarded to Team B on the board.
+                Your <b>Expected Wins</b> measures how many games you would have won if you had played against every other team in the league each week. Comparing Actual Wins against Expected Wins reveals your Schedule Luck factor.
               </p>
             </div>
           </div>
-
-          <details className="math-deep-dive">
-            <summary>
-              <span className="method-icon math-method-icon"><Calculator size={16} /></span>
-              <div className="model-heading">
-                <span className="math-tag">TECHNICAL DEEP DIVE</span>
-                <strong>Mathematical Foundations &amp; Algorithm Reference</strong>
-              </div>
-              <span className="math-badge">Formulas &amp; Proofs</span>
-              <ChevronDown className="model-chevron" size={16} />
-            </summary>
-            <div className="math-deep-dive-body">
-              <p className="math-intro-p">
-                For engineers, mathematicians, and curious players interested in the underlying calculus, probability theory, and discrete optimization algorithms running behind the scenes, here is the formal mathematical specification with links to foundational literature:
-              </p>
-
-              <div className="math-cards-grid">
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">CALCULUS &amp; PROBABILITY</span>
-                    <h4>1. Continuous Scoring Densities &amp; Milestone Integrals</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`f(x; k, θ) = (1 / [Γ(k) θ^k]) * x^(k-1) * e^(-x/θ)
-E[X] = ∫₀^∞ x f(x) dx = kθ = μ
-Var(X) = kθ² = θ²μ   (σ = θ√μ)
-P(X ≥ T) = ∫_T^∞ f(x) dx = 1 - γ(k, T/θ) / Γ(k)`}
-                  </div>
-                  <p>
-                    Weekly player fantasy scoring X is modeled as a continuous random variable following a Gamma density function. Rather than assuming constant variance, positional dispersion scales as σ = θ√μ, reflecting that high-volume starters carry wider absolute point spreads. Yardage milestone bonuses (e.g. 100-yard rushing or 300-yard passing thresholds) are evaluated via improper definite integrals over upper tail thresholds.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Gamma_distribution" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Gamma distribution</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">DISCRETE COMBINATORICS</span>
-                    <h4>2. Greedy Transversal Matroid Matching (Max PF)</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`max_{I ∈ ℐ} ∑_{e ∈ I} w(e)
-where ℐ = { I ⊆ V_players : I matchable in bipartite graph G }
-Greedy matroid optimality: O(|E| log |E|)`}
-                  </div>
-                  <p>
-                    Dynasty non-playoff draft order uses Max Points For (Max PF) to prevent tanking. Evaluating valid starter lineups over position eligibility slots forms a bipartite system. Because the family of matchable subsets forms a transversal matroid satisfying the Rado-Edmonds exchange property, the globally optimal hindsight lineup is solved in O(|E| log |E|) greedy time. Benching stars cannot depress a team's Max PF.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Transversal_matroid" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Transversal matroid</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">MULTIVARIABLE CALCULUS</span>
-                    <h4>3. Gaussian Cumulative Matchup Integrals</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`D = S_A - S_B  ~  N(μ_D, σ_D²)
-μ_D = μ_A - μ_B,   σ_D² = σ_A² + σ_B² - 2Cov(S_A, S_B)
-P(S_A > S_B) = ∫₀^∞ (1 / [σ_D √(2π)]) e^(-(z - μ_D)² / (2σ_D²)) dz
-             = 1/2 [ 1 + erf( μ_D / [σ_D √2] ) ]`}
-                  </div>
-                  <p>
-                    In Engine 13, two opposing teams with starter score distributions S_A and S_B yield a score difference D = S_A - S_B. The exact head-to-head win probability is the double integral of the joint Gaussian density over the positive half-space, evaluated in closed form using the Gauss error function erf(z) with zero sampling noise.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Error_function" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Error function (erf) &amp; Normal CDF</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">GENERATING FUNCTIONS</span>
-                    <h4>4. Exact Win Convolutions (Poisson-Binomial)</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`G_W(z) = ∏_{i=1}^N [ (1 - p_i) + p_i z ] = ∑_{k=0}^N P(W = k) z^k
-Discrete recursion:
-P_m(k) = P_{m-1}(k) * (1 - p_m) + P_{m-1}(k - 1) * p_m`}
-                  </div>
-                  <p>
-                    Over N remaining regular season weeks with heterogeneous win probabilities {'{'}p_1, ..., p_N{'}'}, total wins W follow a Poisson-Binomial distribution. Rather than approximating via standard binomial models (which falsely assume identical odds), the exact probability mass function is calculated by polynomial convolution in O(N²) time.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Poisson_binomial_distribution" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Poisson binomial distribution</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">STOCHASTIC PROCESSES</span>
-                    <h4>5. Markov Chain Health Transitions</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`s_{t+1} = s_t * P
-P = [ [ 1 - λ_pos,    λ_pos   ]
-      [  μ_rec,     1 - μ_rec ] ]
-λ_RB ≈ 4.6%,  λ_TE ≈ 3.6%,  λ_WR ≈ 3.3%,  λ_QB ≈ 2.2%`}
-                  </div>
-                  <p>
-                    Weekly player availability follows a discrete-time Markov chain with transition matrix P. New weekly hazard rates λ are position-calibrated from historical NFL snap data, while recovery parameter μ models multi-week recovery half-lives across simulated seasons to test roster depth and bench insulation.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Markov_chain" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Markov chain</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">LINEAR ALGEBRA</span>
-                    <h4>6. Sinkhorn-Knopp Doubly-Stochastic Scaling</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`lim_{k → ∞} D_1^(k) M D_2^(k) = P*
-subject to:
-∑_{j=1}^M P*_{ij} = 1  (∀ i),     ∑_{i=1}^M P*_{ij} = 1  (∀ j)`}
-                  </div>
-                  <p>
-                    Ensemble averaging across 13 engines produces a raw probability matrix M. Because every team must be assigned exactly one pick slot and every pick slot must belong to exactly one team, M must lie on the Birkhoff polytope. Alternating diagonal scaling converges linearly to a unique doubly-stochastic matrix P*, ensuring all pick odds sum to exactly 100%.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Sinkhorn%27s_theorem" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Sinkhorn's theorem</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">PROBABILITY THEORY</span>
-                    <h4>7. Expected Value (xPick) &amp; Sensitivity Bounds</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`E[Pick_i] = ∑_{j=1}^M j * P(Pick_i = j)
-Spread(i, j) = [ min_{m ∈ ℳ} P_m(i, j),   max_{m ∈ ℳ} P_m(i, j) ]`}
-                  </div>
-                  <p>
-                    The Expected Pick (xPick) calculates the discrete expected value (first statistical moment) of the pick distribution, providing a continuous draft capital metric. The sensitivity range computes the infimum and supremum probabilities across the 13 independent engine hypotheses ℳ, bounding model uncertainty.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Expected_value" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Expected value</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-
-                <div className="math-card">
-                  <div className="math-card-header">
-                    <span className="math-card-tag">ESTIMATION THEORY</span>
-                    <h4>8. Empirical Bayes &amp; Monte Carlo Trials</h4>
-                  </div>
-                  <div className="math-formula-box">
-{`μ̂_i = B_i * x̄_i + (1 - B_i) * μ_{0, i}
-B_i = τ² / [ τ² + σ_i² / n_i ]
-P(Pick = j) ≈ (1 / K) ∑_{k=1}^K I(Pick^(k) = j),   K = 6,000`}
-                  </div>
-                  <p>
-                    Player baseline means apply Empirical Bayes shrinkage, pulling small in-season sample averages toward projected priors to prevent overfitting early anomalies. Twelve Monte Carlo engines then simulate 6,000 complete remaining seasons with persistent talent and offensive shocks.
-                  </p>
-                  <a href="https://en.wikipedia.org/wiki/Empirical_Bayes_method" target="_blank" rel="noopener noreferrer" className="math-wiki-link">
-                    <span>Read Wikipedia: Empirical Bayes method</span>
-                    <ArrowUpRight size={12} />
-                  </a>
-                </div>
-              </div>
-            </div>
-          </details>
         </div>
       </details>
-      <div className="bottom-note">UNOFFICIAL DYNASTY TOOL <span>·</span> LIVE SCORES AND PLAYER PROJECTIONS BY SLEEPER</div>
     </main>
   )
 }
