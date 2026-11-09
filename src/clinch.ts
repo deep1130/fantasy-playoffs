@@ -89,6 +89,8 @@ export interface TeamClinchProfile {
   byeExplanation: string
   fastestPlayoffClinchWeek: number | null
   fastestByeClinchWeek: number | null
+  fastestPlayoffElimWeek: number | null
+  fastestByeElimWeek: number | null
   weekImpactScenarios: string[]
   upcomingOpponents: { week: number; opponentRosterId: number; opponentName: string }[]
 
@@ -411,20 +413,20 @@ export function analyzeLeagueClinch(
       ? (maxPossibleWins < cutoffTeam.effectiveWins || (maxPossibleWins === cutoffTeam.effectiveWins && pointsFor < cutoffTeam.pointsFor))
       : false
 
-    // Magic Number for Playoff (Seed K)
+    // Magic Number for Playoff (Seed K) - Only for teams inside playoff cutoff
     let magicNumber: number | null = null
     if (hasClinchedPlayoff) {
       magicNumber = 0
-    } else if (isEliminatedFromPlayoffs) {
+    } else if (isEliminatedFromPlayoffs || seed > playoffSpots) {
       magicNumber = null
     } else if (chaserTeam) {
       const chaserMax = chaserTeam.effectiveWins + remainingGamesPerTeam
       magicNumber = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
     }
 
-    // Elimination Number for Playoff (Seed K)
+    // Elimination Number for Playoff (Seed K) - Only for teams outside playoff cutoff
     let eliminationNumber: number | null = null
-    if (hasClinchedPlayoff) {
+    if (hasClinchedPlayoff || seed <= playoffSpots) {
       eliminationNumber = null
     } else if (isEliminatedFromPlayoffs) {
       eliminationNumber = 0
@@ -453,20 +455,20 @@ export function analyzeLeagueClinch(
       ? (maxPossibleWins < byeCutoffTeam.effectiveWins || (maxPossibleWins === byeCutoffTeam.effectiveWins && pointsFor < byeCutoffTeam.pointsFor))
       : true
 
-    // Magic Number for Bye (Seed 1 & 2 vs Seed 3)
+    // Magic Number for Bye (Seed 1 & 2 vs Seed 3) - Only for teams in top B
     let byeMagicNumber: number | null = null
     if (hasClinchedBye) {
       byeMagicNumber = 0
-    } else if (isEliminatedFromBye) {
+    } else if (isEliminatedFromBye || seed > byeSpots) {
       byeMagicNumber = null
-    } else if (seed <= byeSpots && byeChaserTeam) {
+    } else if (byeChaserTeam) {
       const byeChaserMax = byeChaserTeam.effectiveWins + remainingGamesPerTeam
       byeMagicNumber = Math.max(1, Math.ceil(byeChaserMax + 1 - effectiveWins))
     }
 
-    // Elimination Number for Bye (Seed 3+ vs Seed 2)
+    // Elimination Number for Bye (Seed 3+ vs Seed 2) - Only for teams outside top B
     let byeEliminationNumber: number | null = null
-    if (hasClinchedBye) {
+    if (hasClinchedBye || seed <= byeSpots) {
       byeEliminationNumber = null
     } else if (isEliminatedFromBye) {
       byeEliminationNumber = 0
@@ -592,13 +594,14 @@ export function analyzeLeagueClinch(
     // -------------------------------------------------------------
     let magicNumberExplanation = ''
     if (hasClinchedPlayoff) {
-      magicNumberExplanation = 'Clinched Playoff Spot. Cannot fall below top 6.'
+      magicNumberExplanation = 'Clinched Playoff Spot. Locked in the top 6.'
     } else if (isEliminatedFromPlayoffs) {
       magicNumberExplanation = 'Mathematically eliminated from the playoff bracket.'
-    } else if (magicNumber !== null) {
+    } else if (seed <= playoffSpots && magicNumber !== null) {
       magicNumberExplanation = `Playoff Magic Number: ${magicNumber}. Needs any combination of ${magicNumber} team wins and ${chaserTeam?.acc.name ?? 'Seed 7'} losses across remaining weeks to guarantee a playoff berth.`
     } else {
-      magicNumberExplanation = `Elimination Number: ${eliminationNumber}. Any combination of ${eliminationNumber} team losses and ${cutoffTeam?.acc.name ?? 'Seed 6'} wins will result in elimination.`
+      const behindText = gamesBehindCutoff === 0 ? 'tied with' : `${gamesBehindCutoff.toFixed(1)} games behind`
+      magicNumberExplanation = `Elimination Number: ${eliminationNumber}. Currently ${behindText} ${cutoffTeam?.acc.name ?? 'Seed 6'}. Any combination of ${eliminationNumber} team losses and ${cutoffTeam?.acc.name ?? 'Seed 6'} wins results in mathematical elimination.`
     }
 
     let byeExplanation = ''
@@ -607,44 +610,76 @@ export function analyzeLeagueClinch(
         byeExplanation = 'Clinched First-Round Bye. Advances straight to Semifinals.'
       } else if (isEliminatedFromBye) {
         byeExplanation = 'Eliminated from First-Round Bye contention.'
-      } else if (byeMagicNumber !== null) {
+      } else if (seed <= byeSpots && byeMagicNumber !== null) {
         byeExplanation = `Bye Magic Number: ${byeMagicNumber}. Needs any combination of ${byeMagicNumber} team wins and ${byeChaserTeam?.acc.name ?? 'Seed 3'} losses to secure a top-2 first-round bye.`
       } else {
-        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}. Trails Seed #2 by ${gamesBehindBye.toFixed(1)} games.`
+        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}. Trails Seed #2 (${byeCutoffTeam?.acc.name ?? 'Seed 2'}) by ${gamesBehindBye.toFixed(1)} games.`
       }
     }
 
     const fastestPlayoffClinchWeek =
-      magicNumber !== null && remainingWeeks > 0
+      seed <= playoffSpots && magicNumber !== null && remainingWeeks > 0
         ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(magicNumber / (gamesPerWeek * 2)) - 1))
         : null
 
     const fastestByeClinchWeek =
-      byeMagicNumber !== null && remainingWeeks > 0
+      seed <= byeSpots && byeMagicNumber !== null && remainingWeeks > 0
         ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(byeMagicNumber / (gamesPerWeek * 2)) - 1))
+        : null
+
+    const fastestPlayoffElimWeek =
+      seed > playoffSpots && eliminationNumber !== null && remainingWeeks > 0
+        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(eliminationNumber / (gamesPerWeek * 2)) - 1))
+        : null
+
+    const fastestByeElimWeek =
+      seed > byeSpots && byeEliminationNumber !== null && remainingWeeks > 0
+        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(byeEliminationNumber / (gamesPerWeek * 2)) - 1))
         : null
 
     const weekImpactScenarios: string[] = []
     if (remainingWeeks > 0 && !hasClinchedPlayoff && !isEliminatedFromPlayoffs) {
-      if (hasMedianMatch) {
-        const m2 = magicNumber !== null ? Math.max(0, magicNumber - 2) : null
-        const m1 = magicNumber !== null ? Math.max(0, magicNumber - 1) : null
-        weekImpactScenarios.push(
-          `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Drops Playoff M# to ${m2 ?? 'LOCK'} (or ${m2 !== null ? Math.max(0, m2 - 2) : 0} if chaser goes 0-2).`,
-        )
-        weekImpactScenarios.push(
-          `1-1 Week (Split H2H / Median): Moves to ${totalWins + 1}–${totalLosses + 1}. Reduces Playoff M# by 1 (down to ${m1 ?? 'LOCK'}).`,
-        )
-        weekImpactScenarios.push(
-          `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Playoff M# holds at ${magicNumber ?? '—'}.`,
-        )
-      } else {
-        weekImpactScenarios.push(
-          `Win: Moves to ${totalWins + 1}–${totalLosses}. Drops Playoff M# by 1 (or 2 if chaser loses).`,
-        )
-        weekImpactScenarios.push(
-          `Loss: Moves to ${totalWins}–${totalLosses + 1}. Playoff M# remains at ${magicNumber}.`,
-        )
+      if (seed <= playoffSpots && magicNumber !== null) {
+        if (hasMedianMatch) {
+          const m2 = Math.max(0, magicNumber - 2)
+          const m1 = Math.max(0, magicNumber - 1)
+          weekImpactScenarios.push(
+            `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Drops Playoff M# to ${m2} (or ${Math.max(0, m2 - 2)} if chaser goes 0-2).`,
+          )
+          weekImpactScenarios.push(
+            `1-1 Week (Split H2H / Median): Moves to ${totalWins + 1}–${totalLosses + 1}. Reduces Playoff M# by 1 (down to ${m1}).`,
+          )
+          weekImpactScenarios.push(
+            `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Playoff M# holds at ${magicNumber}.`,
+          )
+        } else {
+          weekImpactScenarios.push(
+            `Win: Moves to ${totalWins + 1}–${totalLosses}. Drops Playoff M# by 1 (or 2 if chaser loses).`,
+          )
+          weekImpactScenarios.push(
+            `Loss: Moves to ${totalWins}–${totalLosses + 1}. Playoff M# remains at ${magicNumber}.`,
+          )
+        }
+      } else if (eliminationNumber !== null) {
+        if (hasMedianMatch) {
+          const e2 = Math.max(0, eliminationNumber - 2)
+          weekImpactScenarios.push(
+            `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Preserves Elimination Number at ${eliminationNumber} and gains up to 2 games on cutoff.`,
+          )
+          weekImpactScenarios.push(
+            `1-1 Week (Split H2H / Median): Moves to ${totalWins + 1}–${totalLosses + 1}. Maintains pace with the playoff cutoff.`,
+          )
+          weekImpactScenarios.push(
+            `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Reduces Elimination Number to ${e2} (or ${Math.max(0, e2 - 2)} if cutoff goes 2-0).`,
+          )
+        } else {
+          weekImpactScenarios.push(
+            `Win: Moves to ${totalWins + 1}–${totalLosses}. Preserves Elimination Number at ${eliminationNumber}.`,
+          )
+          weekImpactScenarios.push(
+            `Loss: Moves to ${totalWins}–${totalLosses + 1}. Reduces Elimination Number to ${Math.max(0, eliminationNumber - 1)}.`,
+          )
+        }
       }
     }
 
@@ -740,6 +775,8 @@ export function analyzeLeagueClinch(
       byeExplanation,
       fastestPlayoffClinchWeek,
       fastestByeClinchWeek,
+      fastestPlayoffElimWeek,
+      fastestByeElimWeek,
       weekImpactScenarios,
       upcomingOpponents,
       weeklyDetails: acc.weeklyDetails,
