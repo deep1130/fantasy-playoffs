@@ -103,6 +103,11 @@ export interface LeagueClinchSummary {
   leagueName: string
   season: string
   currentWeek: number
+  lastScoredWeek: number
+  inProgressWeek: number | null
+  isUsingLiveWeek: boolean
+  weeksAvailable: number[]
+  finalizedWeeks: number[]
   regularSeasonEnd: number
   remainingWeeks: number
   totalTeams: number
@@ -126,7 +131,7 @@ export interface LeagueClinchSummary {
 }
 
 export interface ClinchOptions {
-  enableMedian?: boolean
+  includeInProgress?: boolean
 }
 
 export function calculateMedian(scores: readonly number[]): number {
@@ -175,16 +180,52 @@ export function analyzeLeagueClinch(
   options?: ClinchOptions,
 ): LeagueClinchSummary {
   const totalTeams = data.rosters.length || 12
-  const leagueMedianSetting = Number(data.league.settings.league_average_match) === 1
-  const hasMedianMatch = options?.enableMedian ?? leagueMedianSetting
+  // ALWAYS use median if the league has league_average_match enabled in its settings
+  const hasMedianMatch = Number(data.league.settings.league_average_match) === 1
   const gamesPerWeek = hasMedianMatch ? 2 : 1
   const playoffSpots = Math.min(totalTeams, Math.max(1, Number(data.league.settings.playoff_teams) || 6))
   const byeSpots = playoffSpots >= 6 ? 2 : playoffSpots >= 4 ? 0 : 0
   const playoffStart = Number(data.league.settings.playoff_week_start) || 15
   const regularSeasonEnd = Math.min(18, Math.max(1, playoffStart - 1))
   const currentWeek = Math.min(18, Math.max(1, data.currentWeek || 1))
-  const lastScored = Math.min(regularSeasonEnd, Math.max(0, data.lastScoredWeek || 0))
-  const remainingWeeks = Math.max(0, regularSeasonEnd - lastScored)
+
+  // Determine all available scored weeks
+  const availableWeeks = Object.keys(data.weeks)
+    .map(Number)
+    .filter((w) => w >= 1 && w <= regularSeasonEnd)
+    .sort((a, b) => a - b)
+
+  const allScoredWeeks = availableWeeks.filter((w) => {
+    const feed = data.weeks[w]
+    if (!feed || !feed.matchups || feed.matchups.length === 0) return false
+    return feed.matchups.some((m) => (m.points ?? 0) > 0 || (m.custom_points ?? 0) > 0)
+  })
+
+  const rawLastScored = Number(data.league.settings.last_scored_leg)
+  const lastScoredWeek = Number.isFinite(rawLastScored) && rawLastScored >= 0
+    ? Math.min(regularSeasonEnd, rawLastScored)
+    : Math.max(0, currentWeek - 1)
+
+  const finalizedWeeks = allScoredWeeks.filter((w) => w <= lastScoredWeek)
+  const inProgressWeek = allScoredWeeks.find((w) => w > lastScoredWeek) ?? null
+
+  const includeInProgress = options?.includeInProgress ?? false
+  let seasonWeeks: number[]
+  let isUsingLiveWeek = false
+
+  if (includeInProgress && inProgressWeek != null) {
+    seasonWeeks = allScoredWeeks
+    isUsingLiveWeek = true
+  } else if (finalizedWeeks.length > 0) {
+    seasonWeeks = finalizedWeeks
+    isUsingLiveWeek = false
+  } else {
+    seasonWeeks = allScoredWeeks
+    isUsingLiveWeek = inProgressWeek != null
+  }
+
+  const effectiveCompletedWeeks = seasonWeeks.length > 0 ? Math.max(...seasonWeeks) : lastScoredWeek
+  const remainingWeeks = Math.max(0, regularSeasonEnd - effectiveCompletedWeeks)
   const remainingGamesPerTeam = remainingWeeks * gamesPerWeek
 
   interface Accumulator {
@@ -226,8 +267,8 @@ export function analyzeLeagueClinch(
 
   const weeklyMedians: Record<number, number> = {}
 
-  // Process all completed weeks (1 through lastScored)
-  for (let week = 1; week <= lastScored; week += 1) {
+  // Process all active season weeks (either finalized weeks or including in-progress week)
+  for (const week of seasonWeeks) {
     const weekFeed = data.weeks[week]
     const matchups: SleeperMatchup[] = weekFeed?.matchups || []
 
@@ -333,16 +374,18 @@ export function analyzeLeagueClinch(
     }
   }
 
-  // Official Sleeper points for master accuracy
-  for (const roster of data.rosters) {
-    const acc = accumulators.get(roster.roster_id)!
-    const sleeperFpts = (roster.settings.fpts ?? 0) + (roster.settings.fpts_decimal ? roster.settings.fpts_decimal / 100 : 0)
-    if (sleeperFpts > 0) {
-      acc.pointsFor = sleeperFpts
-    }
-    const sleeperPa = (roster.settings.fpts_against ?? 0) + (roster.settings.fpts_against_decimal ? roster.settings.fpts_against_decimal / 100 : 0)
-    if (sleeperPa > 0) {
-      acc.pointsAgainst = sleeperPa
+  // Official Sleeper points for master accuracy (when using official finalized weeks)
+  if (!isUsingLiveWeek) {
+    for (const roster of data.rosters) {
+      const acc = accumulators.get(roster.roster_id)!
+      const sleeperFpts = (roster.settings.fpts ?? 0) + (roster.settings.fpts_decimal ? roster.settings.fpts_decimal / 100 : 0)
+      if (sleeperFpts > 0) {
+        acc.pointsFor = sleeperFpts
+      }
+      const sleeperPa = (roster.settings.fpts_against ?? 0) + (roster.settings.fpts_against_decimal ? roster.settings.fpts_against_decimal / 100 : 0)
+      if (sleeperPa > 0) {
+        acc.pointsAgainst = sleeperPa
+      }
     }
   }
 
@@ -392,7 +435,7 @@ export function analyzeLeagueClinch(
     const totalGames = Math.max(1, totalWins + totalLosses + totalTies)
     const expectedLosses = Math.max(0, totalGames - scaledExpectedWins)
     const scheduleLuck = totalWins - scaledExpectedWins
-    const allPlayPercentage = lastScored > 0 ? acc.expectedWins / lastScored : 0.5
+    const allPlayPercentage = effectiveCompletedWeeks > 0 ? acc.expectedWins / effectiveCompletedWeeks : 0.5
     const medianGames = acc.medianWins + acc.medianLosses + acc.medianTies
     const medianWinPct = medianGames > 0 ? acc.medianWins / medianGames : 0.5
 
@@ -571,7 +614,8 @@ export function analyzeLeagueClinch(
 
     // Extract upcoming scheduled opponents from data.weeks
     const upcomingOpponents: { week: number; opponentRosterId: number; opponentName: string }[] = []
-    for (let w = currentWeek; w <= regularSeasonEnd; w += 1) {
+    const upcomingStart = effectiveCompletedWeeks + 1
+    for (let w = upcomingStart; w <= regularSeasonEnd; w += 1) {
       const wFeed = data.weeks[w]
       if (!wFeed) continue
       const myMatchup = wFeed.matchups.find((m) => m.roster_id === entry.rosterId)
@@ -619,22 +663,22 @@ export function analyzeLeagueClinch(
 
     const fastestPlayoffClinchWeek =
       seed <= playoffSpots && magicNumber !== null && remainingWeeks > 0
-        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(magicNumber / (gamesPerWeek * 2)) - 1))
+        ? Math.min(regularSeasonEnd, effectiveCompletedWeeks + Math.max(1, Math.ceil(magicNumber / (gamesPerWeek * 2))))
         : null
 
     const fastestByeClinchWeek =
       seed <= byeSpots && byeMagicNumber !== null && remainingWeeks > 0
-        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(byeMagicNumber / (gamesPerWeek * 2)) - 1))
+        ? Math.min(regularSeasonEnd, effectiveCompletedWeeks + Math.max(1, Math.ceil(byeMagicNumber / (gamesPerWeek * 2))))
         : null
 
     const fastestPlayoffElimWeek =
       seed > playoffSpots && eliminationNumber !== null && remainingWeeks > 0
-        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(eliminationNumber / (gamesPerWeek * 2)) - 1))
+        ? Math.min(regularSeasonEnd, effectiveCompletedWeeks + Math.max(1, Math.ceil(eliminationNumber / (gamesPerWeek * 2))))
         : null
 
     const fastestByeElimWeek =
       seed > byeSpots && byeEliminationNumber !== null && remainingWeeks > 0
-        ? Math.min(regularSeasonEnd, currentWeek + Math.max(0, Math.ceil(byeEliminationNumber / (gamesPerWeek * 2)) - 1))
+        ? Math.min(regularSeasonEnd, effectiveCompletedWeeks + Math.max(1, Math.ceil(byeEliminationNumber / (gamesPerWeek * 2))))
         : null
 
     const weekImpactScenarios: string[] = []
@@ -742,7 +786,7 @@ export function analyzeLeagueClinch(
       medianWinPct,
       pointsFor,
       pointsAgainst,
-      pointsPerGame: lastScored > 0 ? pointsFor / lastScored : 0,
+      pointsPerGame: effectiveCompletedWeeks > 0 ? pointsFor / effectiveCompletedWeeks : 0,
       expectedWins: scaledExpectedWins,
       expectedLosses,
       scheduleLuck,
@@ -793,6 +837,11 @@ export function analyzeLeagueClinch(
     leagueName: data.league.name,
     season: data.league.season,
     currentWeek,
+    lastScoredWeek,
+    inProgressWeek,
+    isUsingLiveWeek,
+    weeksAvailable: allScoredWeeks,
+    finalizedWeeks,
     regularSeasonEnd,
     remainingWeeks,
     totalTeams,

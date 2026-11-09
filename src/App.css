@@ -1259,10 +1259,10 @@ tbody tr:active td.sticky-col {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 12px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   cursor: pointer;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
@@ -1286,7 +1286,6 @@ tbody tr:active td.sticky-col {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
 }
 .m-card-identity {
   display: flex;
@@ -1360,18 +1359,25 @@ tbody tr:active td.sticky-col {
 
 .m-card-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+@media (max-width: 360px) {
+  .m-card-metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 .m-metric-cell {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 5px 6px;
   background: var(--surface-raised);
   border-radius: 6px;
   border: 1px solid var(--line);
+  text-align: center;
+  align-items: center;
 }
 .m-metric-cell.highlight {
   background: rgba(56, 189, 248, 0.08);
@@ -1845,7 +1851,7 @@ tbody tr:active td.sticky-col {
   .view-tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 4px;
   }
   .view-tabs button {
