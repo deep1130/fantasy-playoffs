@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  Crown,
   Flame,
   HelpCircle,
   Lock,
@@ -26,14 +27,18 @@ import {
 } from 'lucide-react'
 import { analyzeLeagueClinch, type ClinchStatus, type LeagueClinchSummary } from './clinch'
 import { getDemoLeagueData } from './demoData'
-import { projectDraftOrder } from './projection'
 import { loadLeagueData, type LeagueData } from './sleeper'
 import './App.css'
 
-type MainTab = 'clinch' | 'expected' | 'simulator' | 'picks'
-type FilterOption = 'ALL' | 'CLINCHED' | 'BUBBLE' | 'ELIMINATED'
+type MainTab = 'clinch' | 'bye' | 'expected' | 'simulator'
+type FilterOption = 'ALL' | 'BYE' | 'CLINCHED' | 'BUBBLE' | 'ELIMINATED'
 
-const formatNumber = (value: number) => value.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+const formatDec = (val: number, decimals = 1) =>
+  val.toLocaleString('en-US', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })
+
 const formatPct = (chance: number) => {
   if (chance >= 0.99) return '>99%'
   if (chance <= 0.01 && chance > 0) return '<1%'
@@ -89,7 +94,7 @@ export function App() {
       const next = await loadLeagueData(activeId)
       setData(next)
       setLastUpdated(next.lastUpdated)
-      // If the league explicitly has median match enabled in Sleeper settings, set enableMedian true
+      // Check if league officially has median match
       const hasMedianSetting = Number(next.league.settings.league_average_match) === 1
       if (hasMedianSetting) {
         setEnableMedian(true)
@@ -101,7 +106,7 @@ export function App() {
         window.history.replaceState({}, '', url.toString())
       }
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not load league data.')
+      setError(reason instanceof Error ? reason.message : 'Could not load league data from Sleeper.')
     } finally {
       setBusy(false)
     }
@@ -150,9 +155,6 @@ export function App() {
     return analyzeLeagueClinch(data, { enableMedian })
   }, [data, enableMedian])
 
-  // Draft pick projections (for legacy draft tab)
-  const picks = useMemo(() => (data ? projectDraftOrder(data) : []), [data])
-
   // Filtered teams list
   const query = search.trim().toLowerCase()
   const filteredTeams = useMemo(() => {
@@ -161,14 +163,17 @@ export function App() {
       const matchesSearch = !query || `${team.name} ${team.ownerDisplayName}`.toLowerCase().includes(query)
       if (!matchesSearch) return false
 
+      if (filter === 'BYE') {
+        return team.seed <= 3 || team.byeProbability > 0.15
+      }
       if (filter === 'CLINCHED') {
-        return team.status === 'CLINCHED_PLAYOFF' || team.status === 'CLINCHED_BYE'
+        return team.hasClinchedPlayoff || team.hasClinchedBye
       }
       if (filter === 'BUBBLE') {
-        return team.status === 'ON_THE_BUBBLE' || team.status === 'IN_THE_HUNT'
+        return !team.hasClinchedPlayoff && !team.isEliminatedFromPlayoffs
       }
       if (filter === 'ELIMINATED') {
-        return team.status === 'ELIMINATED'
+        return team.isEliminatedFromPlayoffs
       }
       return true
     })
@@ -178,7 +183,7 @@ export function App() {
   function renderStatusBadge(status: ClinchStatus, label: string) {
     switch (status) {
       case 'CLINCHED_BYE':
-        return <span className="status-pill status-clinched-bye"><Trophy size={12} /> {label}</span>
+        return <span className="status-pill status-clinched-bye"><Crown size={12} /> {label}</span>
       case 'CLINCHED_PLAYOFF':
         return <span className="status-pill status-clinched-playoff"><Check size={12} /> {label}</span>
       case 'IN_THE_HUNT':
@@ -193,12 +198,11 @@ export function App() {
   }
 
   // Helper for clinch meter bar
-  function renderClinchMeter(meter: number, status: ClinchStatus) {
+  function renderMeter(meter: number, isHigh: boolean) {
     let fillClass = 'meter-fill-mid'
-    if (status === 'CLINCHED_BYE' || status === 'CLINCHED_PLAYOFF') fillClass = 'meter-fill-clinched'
-    else if (status === 'IN_THE_HUNT') fillClass = 'meter-fill-high'
-    else if (status === 'WORK_TO_DO') fillClass = 'meter-fill-low'
-    else if (status === 'ELIMINATED') fillClass = 'meter-fill-elim'
+    if (meter >= 99) fillClass = 'meter-fill-clinched'
+    else if (isHigh || meter >= 75) fillClass = 'meter-fill-high'
+    else if (meter <= 25) fillClass = 'meter-fill-low'
 
     return (
       <div className="meter-wrap" title={`Clinch Closeness: ${meter}%`}>
@@ -213,12 +217,12 @@ export function App() {
   // Helper for schedule luck
   function renderLuck(luck: number) {
     if (Math.abs(luck) < 0.2) {
-      return <span className="luck-pill luck-even">0.0 (Even)</span>
+      return <span className="luck-pill neutral">0.0 Even</span>
     }
     if (luck > 0) {
-      return <span className="luck-pill luck-lucky"><TrendingUp size={11} /> +{luck.toFixed(1)} W</span>
+      return <span className="luck-pill very-lucky"><TrendingUp size={11} /> +{formatDec(luck, 1)} W</span>
     }
-    return <span className="luck-pill luck-unlucky"><TrendingDown size={11} /> {luck.toFixed(1)} W</span>
+    return <span className="luck-pill very-unlucky"><TrendingDown size={11} /> {formatDec(luck, 1)} W</span>
   }
 
   // Simulator helper: toggle match winner
@@ -243,7 +247,6 @@ export function App() {
     })
   }
 
-  // Reset simulator
   function handleResetSim() {
     setSimMatchupWinners({})
     setSimMedianWinners({})
@@ -281,34 +284,43 @@ export function App() {
 
   const totalTeams = clinchSummary?.totalTeams ?? 0
   const playoffSpots = clinchSummary?.playoffSpots ?? 6
+  const byeSpots = clinchSummary?.byeSpots ?? 2
   const hasMedian = clinchSummary?.hasMedianMatch ?? false
+
+  const seed1 = clinchSummary?.teams[0]
+  const seed2 = clinchSummary?.teams[1]
+  const seed3 = clinchSummary?.teams[2]
+  const seed6 = clinchSummary?.teams[playoffSpots - 1]
+  const seed7 = clinchSummary?.teams[playoffSpots]
 
   return (
     <main className="app-shell">
-      {/* Top Bar */}
+      {/* Top Bar (matching fantasy-expected-wins style) */}
       <header className="topbar">
-        <a className="brand" href="#top" aria-label="Fantasy Playoffs home">
+        <a href="#top" className="brand" title="Fantasy Playoffs">
           <span className="brand-mark" style={{ background: '#38bdf8', color: '#0a0b0d' }}>
             <Trophy size={16} strokeWidth={2.5} />
           </span>
           <span>FANTASY<span className="brand-light">PLAYOFFS</span></span>
         </a>
         <div className="topbar-right">
-          <span className="season-label">{clinchSummary ? `${clinchSummary.season} SEASON` : 'SLEEPER FANTASY'}</span>
+          <span className="season-label">
+            {clinchSummary ? `${clinchSummary.season} · ${hasMedian ? 'H2H + MEDIAN (2W/WK)' : 'H2H ONLY'}` : 'SLEEPER FANTASY'}
+          </span>
           <span className="live-dot" />
           <span className="live-label">LIVE DATA</span>
         </div>
       </header>
 
-      {/* Intro Header & League Bar */}
+      {/* Intro & League Input (matching fantasy-expected-wins style) */}
       <section className="intro" id="top">
         <div>
           <p className="eyebrow">
-            PLAYOFF CLINCH &amp; EXPECTED WINS <span>·</span> {clinchSummary ? `WEEK ${clinchSummary.currentWeek}` : 'STANDINGS INTELLIGENCE'}
+            PLAYOFF CLINCH &amp; BYE INTELLIGENCE <span>·</span> {clinchSummary ? clinchSummary.leagueName.toUpperCase() : 'SLEEPER ANALYTICS'}
           </p>
-          <h1>The Playoff Race, <em>Decoded.</em></h1>
+          <h1>The Playoff Race &amp; <em>Bye Hunt</em></h1>
           <p className="intro-copy">
-            Exact magic numbers, clinching scenarios, and all-play expected wins — with full calculation support for weekly league scoring median.
+            Exact magic numbers to lock a <b>First-Round Bye</b> (Top 2) and <b>Playoff Spot</b> (Top 6), with full calculation support for weekly league scoring median.
           </p>
         </div>
 
@@ -317,95 +329,122 @@ export function App() {
           <div className="league-input-row">
             <input
               id="league-id"
+              type="text"
               value={leagueId}
-              onChange={(event) => setLeagueId(event.target.value)}
-              onKeyDown={(event) => { if (event.key === 'Enter') void refresh() }}
+              onChange={(e) => setLeagueId(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void refresh() }}
               placeholder="Enter Sleeper League ID"
               aria-label="Sleeper League ID"
               inputMode="numeric"
               autoComplete="off"
               spellCheck={false}
+              disabled={busy}
             />
-            <button
-              type="button"
-              className="demo-button"
-              onClick={loadDemo}
-              title="Preview with realistic 12-team demo league"
-            >
-              <Sparkles size={13} />
-              <span>DEMO</span>
-            </button>
             <button
               type="button"
               className={`share-button ${copied ? 'copied' : ''}`}
               onClick={() => void copyShareUrl()}
               title="Copy shareable link to this league"
+              disabled={busy || !leagueId.trim()}
             >
               {copied ? <Check size={13} /> : <Share2 size={13} />}
-              <span>{copied ? 'COPIED' : 'SHARE'}</span>
+              <span>{copied ? 'Copied' : 'Share'}</span>
             </button>
             <button
               type="button"
               className="refresh-button"
               onClick={() => void refresh()}
               disabled={busy || !leagueId.trim()}
-              title="Load live league data"
             >
-              <RefreshCw size={14} className={busy ? 'spin' : ''} />
-              <span>{busy ? 'UPDATING' : 'REFRESH'}</span>
+              <RefreshCw size={13} className={busy ? 'spin' : ''} />
+              <span>{busy ? 'Loading…' : 'Refresh'}</span>
             </button>
           </div>
           <div className="refresh-meta">
-            <Clock3 size={12} />
-            {lastUpdated
-              ? `UPDATED ${new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · SLEEPER SYNC`
-              : 'ENTER A SLEEPER LEAGUE ID TO BEGIN'}
+            <Clock3 size={11} />
+            <span>
+              {lastUpdated
+                ? `UPDATED ${new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
+                : 'ENTER SLEEPER LEAGUE ID AND CLICK REFRESH'}
+            </span>
           </div>
         </div>
       </section>
 
       {error && (
-        <div className="error-banner">
+        <div className="error-banner" role="alert">
           <CircleAlert size={16} />
-          <span>Live data unavailable: {error}</span>
-          <button type="button" onClick={() => void refresh()}>Retry</button>
+          <span>{error}</span>
+          <button type="button" onClick={() => setError('')}>Dismiss</button>
         </div>
       )}
 
-      {/* Summary KPI Strip */}
-      <section className="summary-strip" aria-label="League summary">
+      {/* Summary Strip (4 KPI Items matching fantasy-expected-wins layout) */}
+      <section className="summary-strip" aria-label="League Overview">
         <div className="summary-item">
-          <span className="summary-label">LEAGUE &amp; SCORING</span>
+          <span className="summary-label">LEAGUE &amp; FORMAT</span>
           <strong>{clinchSummary?.leagueName ?? (busy ? 'Connecting…' : 'No league loaded')}</strong>
           <span className="summary-note">
             {clinchSummary
-              ? `${totalTeams} Teams · ${hasMedian ? '⚡ League Median Active (2W/Wk)' : 'Head-to-Head (1W/Wk)'}`
-              : 'Enter a Sleeper League ID above'}
+              ? `${totalTeams} Teams · ${hasMedian ? '2 Wins/Wk (H2H + Median)' : '1 Win/Wk (H2H)'}`
+              : 'Enter Sleeper League ID above'}
           </span>
         </div>
+
         <div className="summary-item">
-          <span className="summary-label">REGULAR SEASON PROGRESS</span>
+          <span className="summary-label">SEASON PROGRESS</span>
           <strong>
-            {clinchSummary ? `WEEK ${clinchSummary.currentWeek} / ${clinchSummary.regularSeasonEnd}` : '--'}
+            {clinchSummary ? `WEEK ${clinchSummary.currentWeek} OF ${clinchSummary.regularSeasonEnd}` : '--'}
           </strong>
           <span className="summary-note">
             {clinchSummary
-              ? `${clinchSummary.remainingWeeks} weeks remaining (${clinchSummary.remainingGamesPerTeam} max wins left)`
-              : 'Awaiting league ID'}
+              ? `${clinchSummary.remainingWeeks} weeks remaining · ${clinchSummary.remainingGamesPerTeam} max wins left`
+              : 'Awaiting league connection'}
           </span>
         </div>
+
         <div className="summary-item">
-          <span className="summary-label">PLAYOFF BRACKET CUTOFF</span>
-          <strong>{clinchSummary ? `TOP ${playoffSpots} QUALIFY` : '--'}</strong>
+          <span className="summary-label">
+            <Crown size={11} style={{ color: '#c084fc', verticalAlign: 'middle', marginRight: '4px' }} />
+            FIRST-ROUND BYE (TOP {byeSpots})
+          </span>
+          <strong>
+            {seed1 && seed2 ? (
+              <span style={{ fontSize: '14px', color: '#e9d5ff' }}>
+                #1 {seed1.name.slice(0, 12)} ({seed1.totalWins}-{seed1.totalLosses}) · #2 {seed2.name.slice(0, 12)} ({seed2.totalWins}-{seed2.totalLosses})
+              </span>
+            ) : '--'}
+          </strong>
           <span className="summary-note">
-            {clinchSummary
-              ? `${clinchSummary.clinchedCount} Clinched · ${clinchSummary.bubbleCount} In Hunt/Bubble · ${clinchSummary.eliminatedCount} Out`
-              : 'Playoff seeds advance'}
+            {seed1 && seed3
+              ? `#1 Bye Magic: ${seed1.byeMagicNumber ?? 'LOCK'} · Chased by #3 ${seed3.name.slice(0, 14)} (${seed3.totalWins}-${seed3.totalLosses})`
+              : `Top ${byeSpots} earn Round 1 Bye`}
+          </span>
+        </div>
+
+        <div className="summary-item">
+          <span className="summary-label">
+            <Target size={11} style={{ color: '#38bdf8', verticalAlign: 'middle', marginRight: '4px' }} />
+            PLAYOFF BUBBLE (SEED {playoffSpots} vs {playoffSpots + 1})
+          </span>
+          <strong>
+            {seed6 && seed7 ? (
+              <span style={{ fontSize: '14px', color: '#7dd3fc' }}>
+                #6 {seed6.name.slice(0, 12)} ({seed6.totalWins}-{seed6.totalLosses}) vs #7 {seed7.name.slice(0, 12)} ({seed7.totalWins}-{seed7.totalLosses})
+              </span>
+            ) : '--'}
+          </strong>
+          <span className="summary-note">
+            {seed6 && seed7
+              ? seed6.totalWins === seed7.totalWins
+                ? `Tied at ${seed6.totalWins}-${seed6.totalLosses} · #6 leads by +${formatDec(seed6.pointsFor - seed7.pointsFor, 1)} PF`
+                : `#6 leads by ${seed6.totalWins - seed7.totalWins} game(s) · Magic #${seed6.magicNumber}`
+              : `Top ${playoffSpots} qualify for postseason`}
           </span>
         </div>
       </section>
 
-      {/* Prominent League Median Scoring Toggle Bar */}
+      {/* Prominent League Median Toggle Bar */}
       <div style={{
         marginTop: '16px',
         padding: '12px 18px',
@@ -426,7 +465,7 @@ export function App() {
             </strong>
             <p style={{ margin: '2px 0 0', fontSize: '11px', color: 'var(--muted)' }}>
               {enableMedian
-                ? 'Active: Factoring in 2 games each week (1 Head-to-Head + 1 against League Scoring Median). Standings, magic numbers, and odds calculate 2 wins/wk.'
+                ? 'Active: Factoring in 2 games each week (1 Head-to-Head + 1 against Weekly Scoring Median). Standings, magic numbers, and odds reflect 2W/wk.'
                 : 'Disabled: Standings and clinches calculate standard 1 game per week (Head-to-Head only). Click toggle to factor in median.'}
             </p>
           </div>
@@ -454,18 +493,18 @@ export function App() {
         </button>
       </div>
 
-      {/* Navigation Tabs */}
-      <section className="projection-section">
+      {/* Section Heading & Tabs */}
+      <section className="projection-section" style={{ marginTop: '28px' }}>
         <div className="section-heading">
           <div>
             <p className="eyebrow">
-              INTELLIGENCE DASHBOARD <span>·</span> {clinchSummary?.leagueName.toUpperCase() ?? 'SLEEPER'}
+              POSTSEASON INTELLIGENCE <span>·</span> {clinchSummary ? clinchSummary.leagueName.toUpperCase() : 'SLEEPER'}
             </p>
             <h2>
-              {tab === 'clinch' && 'Playoff Clinch Radar'}
+              {tab === 'clinch' && 'Playoff Standings & Clinch Radar'}
+              {tab === 'bye' && 'First-Round Bye Race (Seeds 1 & 2)'}
               {tab === 'expected' && 'Expected Wins & Schedule Luck'}
               {tab === 'simulator' && 'Interactive What-If Playoff Machine'}
-              {tab === 'picks' && 'Dynasty Rookie Draft Assets'}
             </h2>
           </div>
 
@@ -475,7 +514,7 @@ export function App() {
                 <Search size={15} />
                 <input
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
+                  onChange={(e) => setSearch(e.target.value)}
                   placeholder="Find team or owner"
                   aria-label="Find team"
                 />
@@ -490,6 +529,15 @@ export function App() {
                 onClick={() => setTab('clinch')}
               >
                 CLINCH RADAR
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={tab === 'bye'}
+                className={tab === 'bye' ? 'selected' : ''}
+                onClick={() => setTab('bye')}
+              >
+                BYE RACE (TOP 2)
               </button>
               <button
                 type="button"
@@ -509,20 +557,11 @@ export function App() {
               >
                 WHAT-IF MACHINE
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={tab === 'picks'}
-                className={tab === 'picks' ? 'selected' : ''}
-                onClick={() => setTab('picks')}
-              >
-                DRAFT PICKS
-              </button>
             </div>
           </div>
         </div>
 
-        {/* Filter pills on clinch view */}
+        {/* Filter pills */}
         {tab === 'clinch' && data && (
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: '14px', gap: '8px' }}>
             <span style={{ font: '600 10px var(--mono)', color: 'var(--muted)', marginRight: '6px' }}>FILTER:</span>
@@ -532,6 +571,13 @@ export function App() {
               onClick={() => setFilter('ALL')}
             >
               ALL TEAMS ({clinchSummary?.teams.length ?? 0})
+            </button>
+            <button
+              type="button"
+              className={`filter-tab ${filter === 'BYE' ? 'selected' : ''}`}
+              onClick={() => setFilter('BYE')}
+            >
+              👑 BYE CONTENDERS ({clinchSummary?.teams.filter((t) => t.seed <= 3 || t.byeProbability > 0.15).length ?? 0})
             </button>
             <button
               type="button"
@@ -558,7 +604,7 @@ export function App() {
         )}
 
         {/* ------------------------------------------------------------- */}
-        {/* TAB 1: CLINCH RADAR TABLE                                     */}
+        {/* TAB 1: CLINCH RADAR (MAIN STANDINGS & CLINCH TABLE)           */}
         {/* ------------------------------------------------------------- */}
         {tab === 'clinch' && (
           <div className="table-wrap">
@@ -569,10 +615,11 @@ export function App() {
                   <th>FRANCHISE</th>
                   <th>{hasMedian ? 'RECORD (H2H + MED)' : 'RECORD'}</th>
                   {hasMedian && <th>MEDIAN RECORD</th>}
-                  <th>CLINCH STATUS</th>
+                  <th>BYE STATUS</th>
+                  <th>PLAYOFF STATUS</th>
                   <th>CLINCH METER</th>
-                  <th>MAGIC #</th>
-                  <th>ELIM #</th>
+                  <th>PLAYOFF M#</th>
+                  <th>BYE M#</th>
                   <th>PLAYOFF ODDS</th>
                   <th>POINTS FOR</th>
                   <th>SCENARIOS</th>
@@ -580,35 +627,45 @@ export function App() {
               </thead>
               <tbody>
                 {filteredTeams.map((team) => {
-                  const isCutoffLine = team.seed === playoffSpots && filter === 'ALL'
+                  const isByeCutoff = team.seed === byeSpots && filter === 'ALL'
+                  const isPlayoffCutoff = team.seed === playoffSpots && filter === 'ALL'
                   const isExpanded = expandedRosterId === team.rosterId
 
                   return (
                     <Fragment key={team.rosterId}>
                       <tr
-                        className={`clickable-row ${team.seed <= playoffSpots ? 'playoff-row' : 'lottery-row'}`}
+                        className={`clickable-row ${team.seed <= byeSpots ? 'playoff-row' : team.seed <= playoffSpots ? 'playoff-row' : 'lottery-row'}`}
                         onClick={() => setExpandedRosterId(isExpanded ? null : team.rosterId)}
                       >
                         <td className="rank-cell">
-                          <span className={`pick-number ${team.seed <= playoffSpots ? '' : 'lottery-number'}`}>
+                          <span className={`pick-number ${team.seed <= byeSpots ? 'odds-lottery' : team.seed <= playoffSpots ? '' : 'lottery-number'}`} style={team.seed <= byeSpots ? { background: 'rgba(168, 85, 247, 0.15)', borderColor: 'rgba(168, 85, 247, 0.35)', color: '#d8b4fe' } : {}}>
                             {String(team.seed).padStart(2, '0')}
                           </span>
                         </td>
 
                         <td className="franchise-cell">
-                          <span className="franchise-name" title={team.name}>{team.name}</span>
-                          <small style={{ color: 'var(--muted)', fontSize: '10px' }}>{team.ownerDisplayName}</small>
+                          <div className="team-cell">
+                            {team.avatarUrl ? (
+                              <img src={team.avatarUrl} alt="" className="team-avatar" />
+                            ) : (
+                              <div className="team-avatar-fallback">{team.name.charAt(0)}</div>
+                            )}
+                            <div className="team-meta">
+                              <span className="team-title" title={team.name}>{team.name}</span>
+                              <span className="team-sub">{team.ownerDisplayName}</span>
+                            </div>
+                          </div>
                         </td>
 
                         <td className="record-cell">
-                          <span className="record-pill">
-                            <b>{team.totalWins}–{team.totalLosses}{team.totalTies ? `–${team.totalTies}` : ''}</b>
-                          </span>
-                          {hasMedian && (
-                            <span className="record-sub">
-                              {team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med
-                            </span>
-                          )}
+                          <div className="stat-primary">
+                            <strong>{team.totalWins}–{team.totalLosses}{team.totalTies ? `–${team.totalTies}` : ''}</strong>
+                            {hasMedian && (
+                              <span className="record-sub">
+                                {team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med
+                              </span>
+                            )}
+                          </div>
                         </td>
 
                         {hasMedian && (
@@ -619,12 +676,32 @@ export function App() {
                           </td>
                         )}
 
+                        {/* BYE STATUS COLUMN */}
+                        <td>
+                          {team.hasClinchedBye ? (
+                            <span className="status-pill status-clinched-bye"><Crown size={11} /> LOCKED BYE</span>
+                          ) : team.seed <= byeSpots ? (
+                            <span className="status-pill status-clinched-bye" style={{ background: 'rgba(168, 85, 247, 0.10)' }}>
+                              <Crown size={11} /> Bye Seed #{team.seed}
+                            </span>
+                          ) : team.isEliminatedFromBye ? (
+                            <span style={{ color: 'var(--muted)', fontSize: '11px', fontFamily: 'var(--mono)' }}>No Bye</span>
+                          ) : (
+                            <span className="status-pill" style={{ background: 'rgba(192, 132, 252, 0.10)', color: '#c084fc', border: '1px solid rgba(192, 132, 252, 0.25)' }}>
+                              Bye Hunt ({formatPct(team.byeProbability)})
+                            </span>
+                          )}
+                        </td>
+
+                        {/* PLAYOFF STATUS COLUMN */}
                         <td>{renderStatusBadge(team.status, team.statusLabel)}</td>
 
-                        <td className="meter-cell">{renderClinchMeter(team.clinchMeter, team.status)}</td>
+                        {/* CLINCH METER */}
+                        <td className="meter-cell">{renderMeter(team.clinchMeter, team.seed <= playoffSpots)}</td>
 
+                        {/* PLAYOFF MAGIC NUMBER */}
                         <td>
-                          {team.magicNumber === 0 ? (
+                          {team.hasClinchedPlayoff ? (
                             <span className="magic-pill magic-lock"><Lock size={11} /> LOCK</span>
                           ) : team.magicNumber !== null ? (
                             <span className={`magic-pill ${team.magicNumber <= (hasMedian ? 4 : 2) ? 'magic-active' : 'magic-far'}`}>
@@ -635,12 +712,19 @@ export function App() {
                           )}
                         </td>
 
+                        {/* BYE MAGIC NUMBER */}
                         <td>
-                          {team.eliminationNumber === 0 ? (
-                            <span className="magic-pill elim-out">OUT</span>
-                          ) : team.eliminationNumber !== null ? (
-                            <span className={`magic-pill ${team.eliminationNumber <= (hasMedian ? 4 : 2) ? 'elim-danger' : 'magic-far'}`}>
-                              E: {team.eliminationNumber}
+                          {team.hasClinchedBye ? (
+                            <span className="magic-pill status-clinched-bye"><Crown size={11} /> LOCKED</span>
+                          ) : team.byeMagicNumber !== null ? (
+                            <span className="magic-pill magic-bye">
+                              Bye M: {team.byeMagicNumber}
+                            </span>
+                          ) : team.isEliminatedFromBye ? (
+                            <span style={{ color: 'var(--muted)', fontSize: '10px' }}>OUT</span>
+                          ) : team.byeEliminationNumber !== null ? (
+                            <span className="magic-pill elim-danger" style={{ fontSize: '10px' }}>
+                              Bye E: {team.byeEliminationNumber}
                             </span>
                           ) : (
                             <span style={{ color: 'var(--muted)' }}>—</span>
@@ -653,7 +737,7 @@ export function App() {
                           </b>
                         </td>
 
-                        <td className="numeric-cell">{formatNumber(team.pointsFor)}</td>
+                        <td className="numeric-cell">{formatDec(team.pointsFor, 1)}</td>
 
                         <td>
                           <span className={`expand-toggle ${isExpanded ? 'open' : ''}`}>
@@ -661,9 +745,20 @@ export function App() {
                           </span>
                         </td>
                       </tr>
-                      {isCutoffLine && (
-                        <tr className="playoff-cutoff-line">
-                          <td colSpan={hasMedian ? 11 : 10}>
+
+                      {/* FIRST ROUND BYE CUTOFF LINE */}
+                      {isByeCutoff && (
+                        <tr className="cutoff-line-bye">
+                          <td colSpan={hasMedian ? 12 : 11}>
+                            👑 TOP {byeSpots} CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS) ▼
+                          </td>
+                        </tr>
+                      )}
+
+                      {/* PLAYOFF BUBBLE CUTOFF LINE */}
+                      {isPlayoffCutoff && (
+                        <tr className="cutoff-line-playoff">
+                          <td colSpan={hasMedian ? 12 : 11}>
                             ▲ TOP {playoffSpots} QUALIFY FOR PLAYOFFS &nbsp;|&nbsp; BUBBLE CUTOFF LINE ▼
                           </td>
                         </tr>
@@ -674,19 +769,19 @@ export function App() {
 
                 {!data && (
                   <tr>
-                    <td colSpan={11} className="empty-cell">
+                    <td colSpan={12} className="empty-cell">
                       {busy ? (
-                        <><RefreshCw size={16} className="spin" /> Calculating playoff clinch models…</>
+                        <><RefreshCw size={16} className="spin" /> Loading live Sleeper league data…</>
                       ) : (
                         <div className="empty-league-prompt">
-                          <p style={{ fontSize: '14px', color: 'var(--ink)' }}>
+                          <p style={{ fontSize: '15px', color: 'var(--ink)' }}>
                             Enter any public Sleeper League ID above to calculate live playoff clinch scenarios and magic numbers.
                           </p>
-                          <p style={{ fontSize: '12px', color: 'var(--muted)', margin: '4px 0 12px' }}>
-                            Full calculation engine supporting regular head-to-head or weekly league scoring median (2 games/wk).
+                          <p style={{ fontSize: '12px', color: 'var(--muted)', margin: '6px 0 14px' }}>
+                            Full engine supporting both Head-to-Head and Weekly League Median scoring formats.
                           </p>
-                          <button type="button" className="demo-button" style={{ borderRadius: '5px' }} onClick={loadDemo}>
-                            <Sparkles size={13} /> Or test with Demo League
+                          <button type="button" className="demo-button" onClick={loadDemo}>
+                            <Sparkles size={13} /> Or explore with Demo League
                           </button>
                         </div>
                       )}
@@ -695,9 +790,133 @@ export function App() {
                 )}
                 {data && filteredTeams.length === 0 && (
                   <tr>
-                    <td colSpan={11} className="empty-cell">No teams match your filter.</td>
+                    <td colSpan={12} className="empty-cell">No teams match your filter.</td>
                   </tr>
                 )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------- */}
+        {/* TAB 2: FIRST-ROUND BYE RACE (TOP 2 SEEDS FOCUS)               */}
+        {/* ------------------------------------------------------------- */}
+        {tab === 'bye' && (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th className="rank-col">SEED</th>
+                  <th>FRANCHISE</th>
+                  <th>RECORD</th>
+                  <th>BYE STATUS</th>
+                  <th>BYE CLINCH METER</th>
+                  <th>BYE MAGIC #</th>
+                  <th>BYE ELIM #</th>
+                  <th>BYE ODDS</th>
+                  <th>GAMES AHEAD / BEHIND</th>
+                  <th>POINTS FOR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredTeams.map((team) => {
+                  const isByeCutoff = team.seed === byeSpots
+
+                  return (
+                    <Fragment key={team.rosterId}>
+                      <tr className={team.seed <= byeSpots ? 'playoff-row' : 'lottery-row'}>
+                        <td className="rank-cell">
+                          <span className="pick-number" style={team.seed <= byeSpots ? { background: 'rgba(168, 85, 247, 0.15)', borderColor: 'rgba(168, 85, 247, 0.35)', color: '#d8b4fe' } : {}}>
+                            {String(team.seed).padStart(2, '0')}
+                          </span>
+                        </td>
+
+                        <td className="franchise-cell">
+                          <div className="team-cell">
+                            {team.avatarUrl ? (
+                              <img src={team.avatarUrl} alt="" className="team-avatar" />
+                            ) : (
+                              <div className="team-avatar-fallback">{team.name.charAt(0)}</div>
+                            )}
+                            <div className="team-meta">
+                              <span className="team-title">{team.name}</span>
+                              <span className="team-sub">{team.ownerDisplayName}</span>
+                            </div>
+                          </div>
+                        </td>
+
+                        <td className="record-cell">
+                          <div className="stat-primary">
+                            <strong>{team.totalWins}–{team.totalLosses}</strong>
+                            {hasMedian && <span className="record-sub">{team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med</span>}
+                          </div>
+                        </td>
+
+                        <td>
+                          {team.hasClinchedBye ? (
+                            <span className="status-pill status-clinched-bye"><Crown size={11} /> CLINCHED BYE</span>
+                          ) : team.seed <= byeSpots ? (
+                            <span className="status-pill status-clinched-bye"><Crown size={11} /> Bye Holder #{team.seed}</span>
+                          ) : team.isEliminatedFromBye ? (
+                            <span className="status-pill status-eliminated">Eliminated from Bye</span>
+                          ) : (
+                            <span className="status-pill" style={{ background: 'rgba(192, 132, 252, 0.12)', color: '#c084fc', border: '1px solid rgba(192, 132, 252, 0.3)' }}>
+                              In Bye Hunt
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="meter-cell">{renderMeter(team.byeMeter, team.seed <= byeSpots)}</td>
+
+                        <td>
+                          {team.hasClinchedBye ? (
+                            <span className="magic-pill status-clinched-bye"><Crown size={11} /> LOCKED</span>
+                          ) : team.byeMagicNumber !== null ? (
+                            <span className="magic-pill magic-bye">
+                              M: {team.byeMagicNumber}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--muted)' }}>—</span>
+                          )}
+                        </td>
+
+                        <td>
+                          {team.isEliminatedFromBye ? (
+                            <span className="magic-pill elim-out">OUT</span>
+                          ) : team.byeEliminationNumber !== null ? (
+                            <span className="magic-pill elim-danger">
+                              E: {team.byeEliminationNumber}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--muted)' }}>—</span>
+                          )}
+                        </td>
+
+                        <td className="numeric-cell">
+                          <b style={{ color: team.byeProbability >= 0.5 ? '#c084fc' : team.byeProbability <= 0.05 ? '#94a3b8' : '#38bdf8' }}>
+                            {formatPct(team.byeProbability)}
+                          </b>
+                        </td>
+
+                        <td className="numeric-cell">
+                          {team.seed <= byeSpots
+                            ? <span style={{ color: '#34d399' }}>+{team.gamesBehindBye === 0 ? (clinchSummary?.teams[byeSpots]?.totalWins ? team.totalWins - clinchSummary.teams[byeSpots].totalWins : 0) : 0} G lead</span>
+                            : <span style={{ color: '#fb923c' }}>-{team.gamesBehindBye} G back</span>}
+                        </td>
+
+                        <td className="numeric-cell">{formatDec(team.pointsFor, 1)}</td>
+                      </tr>
+
+                      {isByeCutoff && (
+                        <tr className="cutoff-line-bye">
+                          <td colSpan={10}>
+                            👑 TOP {byeSpots} CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS) ▼
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -725,8 +944,37 @@ export function App() {
               <div className="drawer-content" style={{ padding: 0 }}>
                 {/* Clinch Paths */}
                 <div>
+                  {/* First-round bye path */}
+                  {byeSpots > 0 && (
+                    <div style={{ marginBottom: '12px' }}>
+                      <h4 style={{ color: '#c084fc', fontSize: '13px', margin: '0 0 8px' }}>
+                        <Crown size={14} /> First-Round Bye Race (Top 2)
+                      </h4>
+                      {team.hasClinchedBye ? (
+                        <p style={{ color: '#c084fc', fontSize: '12px', margin: 0 }}>
+                          👑 <b>LOCKED FIRST-ROUND BYE!</b> Mathematically guaranteed a top 2 finish.
+                        </p>
+                      ) : team.clinchByeThisWeekScenarios.length > 0 ? (
+                        <ul className="drawer-scenarios">
+                          {team.clinchByeThisWeekScenarios.map((s, i) => (
+                            <li key={i} className="bye-scenario"><Crown size={14} /> <span>{s}</span></li>
+                          ))}
+                        </ul>
+                      ) : team.isEliminatedFromBye ? (
+                        <p style={{ color: 'var(--muted)', fontSize: '12px', margin: 0 }}>
+                          Mathematically eliminated from a top 2 bye. Focusing on locking a playoff seed.
+                        </p>
+                      ) : (
+                        <p style={{ color: 'var(--ink-secondary)', fontSize: '12px', margin: 0 }}>
+                          Bye Magic #{team.byeMagicNumber ?? 'N/A'}. Needs wins + Seed 3 ({seed3?.name}) losses down the stretch to lock a bye.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Playoff path */}
                   <h4 style={{ color: '#34d399', fontSize: '13px', margin: '0 0 8px' }}>
-                    <ShieldCheck size={14} /> Clinching Scenarios (This Week)
+                    <ShieldCheck size={14} /> Playoff Clinch Scenarios (This Week)
                   </h4>
                   {team.clinchThisWeekScenarios.length > 0 ? (
                     <ul className="drawer-scenarios">
@@ -734,17 +982,17 @@ export function App() {
                         <li key={i} className="clinch-scenario"><Check size={14} /> <span>{s}</span></li>
                       ))}
                     </ul>
-                  ) : team.status === 'CLINCHED_PLAYOFF' || team.status === 'CLINCHED_BYE' ? (
+                  ) : team.hasClinchedPlayoff ? (
                     <p style={{ color: '#34d399', fontSize: '12px', margin: 0 }}>
-                      🎉 <b>CLINCHED!</b> This team has mathematically secured a playoff spot and cannot be passed by enough teams to miss.
+                      🎉 <b>CLINCHED PLAYOFFS!</b> This team has mathematically secured a playoff ticket.
                     </p>
-                  ) : team.status === 'ELIMINATED' ? (
+                  ) : team.isEliminatedFromPlayoffs ? (
                     <p style={{ color: '#94a3b8', fontSize: '12px', margin: 0 }}>
                       Mathematically eliminated from contention.
                     </p>
                   ) : (
                     <p style={{ color: 'var(--muted)', fontSize: '12px', margin: 0 }}>
-                      Cannot mathematically clinch this week. Wins this week will reduce their Magic Number ({team.magicNumber}) for Week {(clinchSummary?.currentWeek ?? 1) + 1}.
+                      Cannot mathematically clinch this week. Wins this week will reduce their Playoff Magic Number ({team.magicNumber}) for Week {(clinchSummary?.currentWeek ?? 1) + 1}.
                     </p>
                   )}
 
@@ -766,7 +1014,7 @@ export function App() {
                 {/* Performance & Median Breakdown */}
                 <div>
                   <h4 style={{ color: '#38bdf8', fontSize: '13px', margin: '0 0 8px' }}>
-                    <Award size={14} /> Performance &amp; Schedule Breakdown
+                    <Award size={14} /> Performance &amp; Median Breakdown
                   </h4>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px', fontSize: '11.5px' }}>
                     <div style={{ background: 'var(--surface)', padding: '8px 10px', borderRadius: '4px' }}>
@@ -791,7 +1039,7 @@ export function App() {
         })()}
 
         {/* ------------------------------------------------------------- */}
-        {/* TAB 2: EXPECTED WINS & SCHEDULE LUCK MATRIX                    */}
+        {/* TAB 3: EXPECTED WINS & SCHEDULE LUCK MATRIX                    */}
         {/* ------------------------------------------------------------- */}
         {tab === 'expected' && (
           <div className="table-wrap">
@@ -828,14 +1076,23 @@ export function App() {
                       </td>
 
                       <td className="franchise-cell">
-                        <span className="franchise-name" title={team.name}>{team.name}</span>
-                        <small style={{ color: 'var(--muted)', fontSize: '10px' }}>{team.ownerDisplayName}</small>
+                        <div className="team-cell">
+                          {team.avatarUrl ? (
+                            <img src={team.avatarUrl} alt="" className="team-avatar" />
+                          ) : (
+                            <div className="team-avatar-fallback">{team.name.charAt(0)}</div>
+                          )}
+                          <div className="team-meta">
+                            <span className="team-title">{team.name}</span>
+                            <span className="team-sub">{team.ownerDisplayName}</span>
+                          </div>
+                        </div>
                       </td>
 
                       <td className="record-cell">
-                        <span className="record-pill">
-                          <b>{team.totalWins}–{team.totalLosses}</b>
-                        </span>
+                        <div className="stat-primary">
+                          <strong>{team.totalWins}–{team.totalLosses}</strong>
+                        </div>
                       </td>
 
                       <td className="numeric-cell" style={{ fontWeight: 600 }}>
@@ -854,8 +1111,8 @@ export function App() {
                         </span>
                       </td>
 
-                      <td className="numeric-cell">{formatNumber(team.pointsFor)}</td>
-                      <td className="numeric-cell" style={{ color: 'var(--muted)' }}>{formatNumber(team.pointsAgainst)}</td>
+                      <td className="numeric-cell">{formatDec(team.pointsFor, 1)}</td>
+                      <td className="numeric-cell" style={{ color: 'var(--muted)' }}>{formatDec(team.pointsAgainst, 1)}</td>
 
                       <td>
                         <span style={{ font: '600 10.5px var(--mono)', color: luck > 0 ? '#4ade80' : luck < 0 ? '#fb7185' : 'var(--muted)' }}>
@@ -871,7 +1128,7 @@ export function App() {
         )}
 
         {/* ------------------------------------------------------------- */}
-        {/* TAB 3: INTERACTIVE WHAT-IF PLAYOFF MACHINE                    */}
+        {/* TAB 4: INTERACTIVE WHAT-IF PLAYOFF MACHINE                    */}
         {/* ------------------------------------------------------------- */}
         {tab === 'simulator' && (
           <div className="simulator-wrap">
@@ -907,6 +1164,7 @@ export function App() {
                 </thead>
                 <tbody>
                   {simulatedTeams.map((team, idx) => {
+                    const isBye = idx < byeSpots
                     const isPlayoff = idx < playoffSpots
                     return (
                       <tr key={team.rosterId} className={isPlayoff ? 'playoff-row' : 'lottery-row'}>
@@ -927,7 +1185,9 @@ export function App() {
                           {team.totalWins} Wins
                         </td>
                         <td>
-                          {isPlayoff ? (
+                          {isBye ? (
+                            <span className="status-pill status-clinched-bye"><Crown size={11} /> Round 1 Bye (Seed #{idx + 1})</span>
+                          ) : isPlayoff ? (
                             <span className="status-pill status-clinched-playoff"><Check size={11} /> Playoff Seed #{idx + 1}</span>
                           ) : (
                             <span className="status-pill status-eliminated">Out of Playoff Field</span>
@@ -1024,52 +1284,11 @@ export function App() {
           </div>
         )}
 
-        {/* ------------------------------------------------------------- */}
-        {/* TAB 4: DYNASTY DRAFT PICKS                                     */}
-        {/* ------------------------------------------------------------- */}
-        {tab === 'picks' && (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th className="rank-col">PICK</th>
-                  <th>ORIGINAL FRANCHISE</th>
-                  <th>PICK HOLDER</th>
-                  <th>RECORD</th>
-                  <th>PROJECTED MAX PF</th>
-                  <th>CURRENT MAX PF</th>
-                </tr>
-              </thead>
-              <tbody>
-                {picks.map((team) => (
-                  <tr key={team.roster.roster_id} className={team.pick <= (totalTeams - playoffSpots) ? 'lottery-row' : 'playoff-row'}>
-                    <td className="rank-cell">
-                      <span className={`pick-number ${team.pick <= (totalTeams - playoffSpots) ? 'lottery-number' : ''}`}>
-                        {String(team.pick).padStart(2, '0')}
-                      </span>
-                    </td>
-                    <td className="franchise-cell">
-                      <span className="franchise-name">{team.name}</span>
-                    </td>
-                    <td className="holder-cell">
-                      {team.pickHolder} {team.pickHolderId !== team.roster.roster_id && <span className="asset-tag">TRADED</span>}
-                    </td>
-                    <td className="record-cell">
-                      <span className="record-pill">{team.record}</span>
-                    </td>
-                    <td className="numeric-cell">{formatNumber(team.maxPf)}</td>
-                    <td className="numeric-cell">{formatNumber(team.currentMaxPf)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         <footer className="table-footer">
           <div className="legend">
-            <span><i className="legend-dot playoff-dot" /> SEEDS 1–{playoffSpots} PLAYOFF QUALIFIED</span>
-            <span><i className="legend-dot lottery-dot" /> SEEDS {playoffSpots + 1}–{totalTeams} ELIMINATION / LOTTERY</span>
+            <span><i className="legend-dot" style={{ background: '#c084fc' }} /> SEEDS 1–{byeSpots} FIRST-ROUND BYE</span>
+            <span><i className="legend-dot playoff-dot" /> SEEDS {byeSpots + 1}–{playoffSpots} PLAYOFF QUALIFIED</span>
+            <span><i className="legend-dot lottery-dot" /> SEEDS {playoffSpots + 1}–{totalTeams} ELIMINATION BUBBLE</span>
             <span><ShieldCheck size={14} /> LEAGUE MEDIAN SUPPORT ACTIVE</span>
           </div>
           <span className="simulation-note">
@@ -1084,7 +1303,7 @@ export function App() {
           <span className="method-icon"><HelpCircle size={18} /></span>
           <div className="model-heading">
             <span className="model-tag">ANALYTICS GUIDE</span>
-            <strong>How Playoff Clinch Math &amp; League Median Work</strong>
+            <strong>How Playoff Clinch Math, First-Round Byes, &amp; League Median Work</strong>
           </div>
           <ChevronDown className="model-chevron" size={17} />
         </summary>
@@ -1092,11 +1311,21 @@ export function App() {
           <div className="model-cards-grid">
             <div className="model-card">
               <div className="model-card-header">
+                <span className="model-card-tag">FIRST-ROUND BYE</span>
+                <h4>Top 2 Seeds Earn a Bye</h4>
+              </div>
+              <p>
+                In 6-team playoff brackets, Seeds 1 and 2 skip the quarterfinal round and advance straight to the semifinals. The <b>Bye Magic Number</b> measures the combination of your wins and Seed 3 losses required to lock a top-2 finish.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
                 <span className="model-card-tag">MAGIC NUMBER (M)</span>
                 <h4>Clinching Mathematical Locks</h4>
               </div>
               <p>
-                A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #{playoffSpots + 1}) to catch them. The <b>Magic Number</b> represents the combination of your wins and chaser losses required to lock the spot. When $M = 0$, you are officially locked!
+                A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #{playoffSpots + 1}) to catch them. When $M = 0$, you are officially locked!
               </p>
             </div>
 
@@ -1106,17 +1335,7 @@ export function App() {
                 <h4>Two Games Every Week</h4>
               </div>
               <p>
-                In leagues using median scoring, each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league. This doubles the total regular-season games and accelerates clinching or elimination races.
-              </p>
-            </div>
-
-            <div className="model-card">
-              <div className="model-card-header">
-                <span className="model-card-tag">EXPECTED WINS (xW)</span>
-                <h4>All-Play Schedule Luck</h4>
-              </div>
-              <p>
-                Your <b>Expected Wins</b> measures how many games you would have won if you had played against every other team in the league each week. Comparing Actual Wins against Expected Wins reveals your Schedule Luck factor.
+                In leagues using median scoring, each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league. This doubles the total regular-season games and accelerates clinching and elimination races.
               </p>
             </div>
           </div>

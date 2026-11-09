@@ -1,4 +1,4 @@
-import type { LeagueData, Matchup, SleeperRoster } from './sleeper'
+import type { LeagueData, SleeperMatchup, SleeperRoster } from './sleeper'
 
 export type ClinchStatus =
   | 'CLINCHED_BYE'
@@ -25,7 +25,7 @@ export interface TeamClinchProfile {
   rosterId: number
   name: string
   ownerDisplayName: string
-  avatarUrl?: string
+  avatarUrl: string | null
   seed: number
 
   // Record Breakdown
@@ -57,18 +57,31 @@ export interface TeamClinchProfile {
   // Playoff & Clinch Metrics
   status: ClinchStatus
   statusLabel: string
-  clinchMeter: number // 0 to 100%
-  playoffProbability: number // 0.0 to 1.0
-  byeProbability: number // 0.0 to 1.0
+  clinchMeter: number // 0 to 100% progress toward playoff lock
 
-  magicNumber: number | null // null if already clinched or eliminated
-  eliminationNumber: number | null // null if already clinched or eliminated
+  // BYE CLINCH METRICS (Seed 1 & 2 First-Round Bye)
+  hasClinchedBye: boolean
+  isEliminatedFromBye: boolean
+  byeMagicNumber: number | null // null if locked or eliminated from bye
+  byeEliminationNumber: number | null
+  byeProbability: number // 0.0 to 1.0
+  byeMeter: number // 0 to 100% progress toward bye lock
+  gamesBehindBye: number
+
+  // PLAYOFF CLINCH METRICS (Seed 1-6 Postseason Spot)
+  hasClinchedPlayoff: boolean
+  isEliminatedFromPlayoffs: boolean
+  magicNumber: number | null // magic number for playoff spot (Seed K)
+  eliminationNumber: number | null // elimination number for playoff spot
+  playoffProbability: number // 0.0 to 1.0
   gamesBehindCutoff: number
+
   maxPossibleWins: number
   minPossibleWins: number
 
-  // Scenarios for current / upcoming week
+  // Scenarios for upcoming week
   clinchThisWeekScenarios: string[]
+  clinchByeThisWeekScenarios: string[]
   eliminatedThisWeekScenarios: string[]
 
   // Weekly breakdown
@@ -91,13 +104,14 @@ export interface LeagueClinchSummary {
 
   // Status counts
   clinchedCount: number
+  clinchedByeCount: number
   bubbleCount: number
   eliminatedCount: number
 
-  // Teams sorted by current standings / seed
+  // Standings
   teams: TeamClinchProfile[]
 
-  // Weekly league median historical benchmarks
+  // Weekly league median benchmarks
   weeklyMedians: Record<number, number>
 }
 
@@ -105,9 +119,6 @@ export interface ClinchOptions {
   enableMedian?: boolean
 }
 
-/**
- * Calculates median score for a list of numbers.
- */
 export function calculateMedian(scores: readonly number[]): number {
   if (scores.length === 0) return 0
   const sorted = [...scores].sort((a, b) => a - b)
@@ -132,21 +143,25 @@ export function getUserDisplayName(data: LeagueData, rosterId: number): string {
   return user?.display_name?.trim() || `Manager ${rosterId}`
 }
 
-/**
- * Analyzes historical matchups, weekly scoring medians, expected wins,
- * and computes exact clinch numbers and probabilities for the entire league.
- */
+export function getAvatarUrl(data: LeagueData, rosterId: number): string | null {
+  const roster = data.rosters.find((r) => r.roster_id === rosterId)
+  if (!roster) return null
+  const user = data.users.find((u) => u.user_id === roster.owner_id)
+  const avatarId = user?.metadata?.avatar || user?.avatar
+  if (!avatarId) return null
+  return `https://sleepercdn.com/avatars/thumbs/${avatarId}`
+}
+
 export function analyzeLeagueClinch(
   data: LeagueData,
   options?: ClinchOptions,
 ): LeagueClinchSummary {
   const totalTeams = data.rosters.length || 12
   const leagueMedianSetting = Number(data.league.settings.league_average_match) === 1
-  // Factor in median if option enabled, or if league setting has it enabled, or default true if requested
-  const hasMedianMatch = options?.enableMedian ?? (leagueMedianSetting || true)
+  const hasMedianMatch = options?.enableMedian ?? leagueMedianSetting
   const gamesPerWeek = hasMedianMatch ? 2 : 1
   const playoffSpots = Math.min(totalTeams, Math.max(1, Number(data.league.settings.playoff_teams) || 6))
-  const byeSpots = playoffSpots >= 6 ? 2 : 0
+  const byeSpots = playoffSpots >= 6 ? 2 : playoffSpots >= 4 ? 0 : 0
   const playoffStart = Number(data.league.settings.playoff_week_start) || 15
   const regularSeasonEnd = Math.min(18, Math.max(1, playoffStart - 1))
   const currentWeek = Math.min(18, Math.max(1, data.currentWeek || 1))
@@ -158,6 +173,7 @@ export function analyzeLeagueClinch(
     roster: SleeperRoster
     name: string
     ownerName: string
+    avatarUrl: string | null
     h2hWins: number
     h2hLosses: number
     h2hTies: number
@@ -176,6 +192,7 @@ export function analyzeLeagueClinch(
       roster,
       name: getTeamName(data, roster.roster_id),
       ownerName: getUserDisplayName(data, roster.roster_id),
+      avatarUrl: getAvatarUrl(data, roster.roster_id),
       h2hWins: 0,
       h2hLosses: 0,
       h2hTies: 0,
@@ -194,9 +211,8 @@ export function analyzeLeagueClinch(
   // Process all completed weeks (1 through lastScored)
   for (let week = 1; week <= lastScored; week += 1) {
     const weekFeed = data.weeks[week]
-    const matchups: Matchup[] = weekFeed?.matchups || []
+    const matchups: SleeperMatchup[] = weekFeed?.matchups || []
 
-    // Map roster points for this week
     const weekScores: { rosterId: number; points: number; matchupId: number | null }[] = []
 
     for (const roster of data.rosters) {
@@ -206,14 +222,11 @@ export function analyzeLeagueClinch(
         pts = typeof matchup.custom_points === 'number' && Number.isFinite(matchup.custom_points)
           ? matchup.custom_points
           : Number(matchup.points) || 0
-      } else {
-        const historicalPts = (data.historicalTeamScores[roster.roster_id] || [])[week - 1]
-        pts = typeof historicalPts === 'number' && Number.isFinite(historicalPts) ? historicalPts : 0
       }
       weekScores.push({ rosterId: roster.roster_id, points: pts, matchupId: matchup?.matchup_id ?? null })
     }
 
-    // Calculate exact week median score
+    // Exact median calculation for this week
     const scoreValues = weekScores.map((s) => s.points)
     const weekMedian = calculateMedian(scoreValues)
     weeklyMedians[week] = weekMedian
@@ -275,7 +288,7 @@ export function analyzeLeagueClinch(
         }
       }
 
-      // 3. All-Play Expected Wins (beating other teams)
+      // 3. All-Play Expected Wins
       let allPlayBeaten = 0
       let allPlayTies = 0
       const otherScores = scoreValues.filter((_, idx) => idx !== scoreValues.indexOf(teamScore))
@@ -302,42 +315,22 @@ export function analyzeLeagueClinch(
     }
   }
 
-  // Fallback to official Sleeper totals if historical matchups were not accessible
+  // Official Sleeper points for master accuracy
   for (const roster of data.rosters) {
     const acc = accumulators.get(roster.roster_id)!
     const sleeperFpts = (roster.settings.fpts ?? 0) + (roster.settings.fpts_decimal ? roster.settings.fpts_decimal / 100 : 0)
     if (sleeperFpts > 0) {
       acc.pointsFor = sleeperFpts
     }
-
-    const totalGamesCalculated = acc.h2hWins + acc.h2hLosses + acc.h2hTies
-    if (totalGamesCalculated === 0 && roster.settings.wins != null) {
-      const sleeperWins = roster.settings.wins ?? 0
-      const sleeperLosses = roster.settings.losses ?? 0
-      const sleeperTies = roster.settings.ties ?? 0
-
-      if (leagueMedianSetting) {
-        acc.h2hWins = Math.round(sleeperWins / 2)
-        acc.medianWins = sleeperWins - acc.h2hWins
-        acc.h2hLosses = Math.round(sleeperLosses / 2)
-        acc.medianLosses = sleeperLosses - acc.h2hLosses
-      } else {
-        acc.h2hWins = sleeperWins
-        acc.h2hLosses = sleeperLosses
-        acc.h2hTies = sleeperTies
-        // Estimate median performance based on PF
-        const avgPf = totalTeams > 0 ? (sleeperFpts / (lastScored || 1)) : 100
-        const estimatedMedianWins = Math.min(lastScored, Math.max(0, Math.round((avgPf / 120) * lastScored)))
-        acc.medianWins = estimatedMedianWins
-        acc.medianLosses = Math.max(0, lastScored - estimatedMedianWins)
-      }
+    const sleeperPa = (roster.settings.fpts_against ?? 0) + (roster.settings.fpts_against_decimal ? roster.settings.fpts_against_decimal / 100 : 0)
+    if (sleeperPa > 0) {
+      acc.pointsAgainst = sleeperPa
     }
   }
 
-  // Compute standings & seed
+  // Compute standings & seeds
   const sortedTeams = [...data.rosters].map((roster) => {
     const acc = accumulators.get(roster.roster_id)!
-    // If median is factored in, total wins is H2H + Median
     const totalWins = hasMedianMatch ? (acc.h2hWins + acc.medianWins) : acc.h2hWins
     const totalLosses = hasMedianMatch ? (acc.h2hLosses + acc.medianLosses) : acc.h2hLosses
     const totalTies = hasMedianMatch ? (acc.h2hTies + acc.medianTies) : acc.h2hTies
@@ -361,10 +354,14 @@ export function analyzeLeagueClinch(
     return b.pointsFor - a.pointsFor
   })
 
-  // Cutoff teams for clinch calculations
+  // Cutoff & Chaser Teams for Playoffs (Seed K vs Seed K+1)
   const cutoffIndex = playoffSpots - 1
-  const cutoffTeam = sortedTeams[cutoffIndex] // Seed K (last playoff spot)
-  const chaserTeam = sortedTeams[playoffSpots] // Seed K+1 (first team out)
+  const cutoffTeam = sortedTeams[cutoffIndex] // Seed 6
+  const chaserTeam = sortedTeams[playoffSpots] // Seed 7
+
+  // Cutoff & Chaser Teams for First-Round Bye (Seed 2 vs Seed 3)
+  const byeCutoffTeam = byeSpots > 0 ? sortedTeams[byeSpots - 1] : null // Seed 2
+  const byeChaserTeam = byeSpots > 0 ? sortedTeams[byeSpots] : null // Seed 3
 
   const profiles: TeamClinchProfile[] = sortedTeams.map((entry, index) => {
     const seed = index + 1
@@ -381,7 +378,9 @@ export function analyzeLeagueClinch(
     const medianGames = acc.medianWins + acc.medianLosses + acc.medianTies
     const medianWinPct = medianGames > 0 ? acc.medianWins / medianGames : 0.5
 
-    // Mathematical Clinch Logic
+    // -------------------------------------------------------------
+    // PLAYOFF CLINCH LOGIC (Top 6)
+    // -------------------------------------------------------------
     let teamsThatCanSurpass = 0
     for (const other of sortedTeams) {
       if (other.rosterId === entry.rosterId) continue
@@ -390,9 +389,38 @@ export function analyzeLeagueClinch(
         teamsThatCanSurpass += 1
       }
     }
-    const hasMathematicallyClinchedPlayoff = teamsThatCanSurpass < playoffSpots
+    const hasClinchedPlayoff = teamsThatCanSurpass < playoffSpots
 
-    // Bye clinch check
+    const isEliminatedFromPlayoffs = cutoffTeam
+      ? (maxPossibleWins < cutoffTeam.effectiveWins || (maxPossibleWins === cutoffTeam.effectiveWins && pointsFor < cutoffTeam.pointsFor))
+      : false
+
+    // Magic Number for Playoff (Seed K)
+    let magicNumber: number | null = null
+    if (hasClinchedPlayoff) {
+      magicNumber = 0
+    } else if (isEliminatedFromPlayoffs) {
+      magicNumber = null
+    } else if (chaserTeam) {
+      const chaserMax = chaserTeam.effectiveWins + remainingGamesPerTeam
+      magicNumber = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
+    }
+
+    // Elimination Number for Playoff (Seed K)
+    let eliminationNumber: number | null = null
+    if (hasClinchedPlayoff) {
+      eliminationNumber = null
+    } else if (isEliminatedFromPlayoffs) {
+      eliminationNumber = 0
+    } else if (cutoffTeam) {
+      eliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - cutoffTeam.effectiveWins))
+    }
+
+    const gamesBehindCutoff = cutoffTeam ? cutoffTeam.effectiveWins - effectiveWins : 0
+
+    // -------------------------------------------------------------
+    // FIRST-ROUND BYE CLINCH LOGIC (Top 2)
+    // -------------------------------------------------------------
     let teamsThatCanSurpassForBye = 0
     if (byeSpots > 0) {
       for (const other of sortedTeams) {
@@ -403,80 +431,93 @@ export function analyzeLeagueClinch(
         }
       }
     }
-    const hasMathematicallyClinchedBye = byeSpots > 0 && teamsThatCanSurpassForBye < byeSpots
+    const hasClinchedBye = byeSpots > 0 && teamsThatCanSurpassForBye < byeSpots
 
-    // Elimination check
-    const cannotCatchCutoff = cutoffTeam
-      ? (maxPossibleWins < cutoffTeam.effectiveWins || (maxPossibleWins === cutoffTeam.effectiveWins && pointsFor < cutoffTeam.pointsFor))
-      : false
+    const isEliminatedFromBye = byeSpots > 0 && byeCutoffTeam
+      ? (maxPossibleWins < byeCutoffTeam.effectiveWins || (maxPossibleWins === byeCutoffTeam.effectiveWins && pointsFor < byeCutoffTeam.pointsFor))
+      : true
 
-    // Magic Number (M): Team Wins + Chaser Losses to guarantee playoff spot
-    let magicNumber: number | null = null
-    if (hasMathematicallyClinchedPlayoff) {
-      magicNumber = 0
-    } else if (cannotCatchCutoff) {
-      magicNumber = null
-    } else if (chaserTeam) {
-      const chaserMax = chaserTeam.effectiveWins + remainingGamesPerTeam
-      magicNumber = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
+    // Magic Number for Bye (Seed 1 & 2 vs Seed 3)
+    let byeMagicNumber: number | null = null
+    if (hasClinchedBye) {
+      byeMagicNumber = 0
+    } else if (isEliminatedFromBye) {
+      byeMagicNumber = null
+    } else if (seed <= byeSpots && byeChaserTeam) {
+      const byeChaserMax = byeChaserTeam.effectiveWins + remainingGamesPerTeam
+      byeMagicNumber = Math.max(1, Math.ceil(byeChaserMax + 1 - effectiveWins))
     }
 
-    // Elimination Number (E): Team Losses + Cutoff Wins to officially eliminate
-    let eliminationNumber: number | null = null
-    if (hasMathematicallyClinchedPlayoff) {
-      eliminationNumber = null
-    } else if (cannotCatchCutoff) {
-      eliminationNumber = 0
-    } else if (cutoffTeam) {
-      eliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - cutoffTeam.effectiveWins))
+    // Elimination Number for Bye (Seed 3+ vs Seed 2)
+    let byeEliminationNumber: number | null = null
+    if (hasClinchedBye) {
+      byeEliminationNumber = null
+    } else if (isEliminatedFromBye) {
+      byeEliminationNumber = 0
+    } else if (byeCutoffTeam) {
+      byeEliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - byeCutoffTeam.effectiveWins))
     }
 
-    const gamesBehindCutoff = cutoffTeam ? cutoffTeam.effectiveWins - effectiveWins : 0
+    const gamesBehindBye = byeCutoffTeam ? byeCutoffTeam.effectiveWins - effectiveWins : 0
 
-    // Assign Clinch Status & Clinch Meter
+    // -------------------------------------------------------------
+    // STATUS & CLINCH METERS
+    // -------------------------------------------------------------
     let status: ClinchStatus = 'IN_THE_HUNT'
     let statusLabel = 'In The Hunt'
     let clinchMeter = 50
 
-    if (hasMathematicallyClinchedBye) {
+    if (hasClinchedBye) {
       status = 'CLINCHED_BYE'
-      statusLabel = 'Clinched Bye'
+      statusLabel = 'Clinched Bye 🏆'
       clinchMeter = 100
-    } else if (hasMathematicallyClinchedPlayoff) {
+    } else if (hasClinchedPlayoff) {
       status = 'CLINCHED_PLAYOFF'
-      statusLabel = 'Clinched Playoff'
+      statusLabel = 'Clinched Playoff 🔒'
       clinchMeter = 100
-    } else if (cannotCatchCutoff) {
+    } else if (isEliminatedFromPlayoffs) {
       status = 'ELIMINATED'
       statusLabel = 'Eliminated'
       clinchMeter = 0
     } else if (seed <= playoffSpots) {
       if (magicNumber !== null && magicNumber <= gamesPerWeek * 2) {
         status = 'IN_THE_HUNT'
-        statusLabel = 'Near Lock'
-        clinchMeter = Math.min(95, Math.max(75, 100 - magicNumber * 8))
+        statusLabel = 'Near Lock ⚡'
+        clinchMeter = Math.min(95, Math.max(75, 100 - magicNumber * 6))
       } else {
         status = 'ON_THE_BUBBLE'
         statusLabel = 'On Bubble (In)'
-        clinchMeter = Math.min(74, Math.max(55, 50 + (playoffSpots - seed + 1) * 5))
+        clinchMeter = Math.min(74, Math.max(55, 50 + (playoffSpots - seed + 1) * 4))
       }
     } else {
       if (gamesBehindCutoff <= gamesPerWeek) {
         status = 'ON_THE_BUBBLE'
         statusLabel = 'On Bubble (Hunt)'
-        clinchMeter = Math.max(30, 48 - gamesBehindCutoff * 8)
+        clinchMeter = Math.max(30, 48 - gamesBehindCutoff * 6)
       } else {
         status = 'WORK_TO_DO'
         statusLabel = 'Work To Do'
-        clinchMeter = Math.max(5, 28 - gamesBehindCutoff * 5)
+        clinchMeter = Math.max(5, 26 - gamesBehindCutoff * 4)
       }
     }
 
-    // Playoff Probability
+    // Bye progress meter
+    let byeMeter = 0
+    if (hasClinchedBye) {
+      byeMeter = 100
+    } else if (isEliminatedFromBye) {
+      byeMeter = 0
+    } else if (byeMagicNumber !== null) {
+      byeMeter = Math.min(95, Math.max(20, 100 - byeMagicNumber * 7))
+    } else {
+      byeMeter = Math.max(5, Math.min(50, 45 - gamesBehindBye * 10))
+    }
+
+    // Probabilities
     let playoffProbability = 0
-    if (hasMathematicallyClinchedPlayoff) {
+    if (hasClinchedPlayoff) {
       playoffProbability = 1.0
-    } else if (cannotCatchCutoff) {
+    } else if (isEliminatedFromPlayoffs) {
       playoffProbability = 0.0
     } else {
       const pointDifferential = pointsFor - (cutoffTeam?.pointsFor ?? pointsFor)
@@ -487,33 +528,56 @@ export function analyzeLeagueClinch(
       playoffProbability = Math.min(0.99, Math.max(0.01, 1 / (1 + Math.exp(-z))))
     }
 
-    const byeProbability = byeSpots > 0
-      ? (hasMathematicallyClinchedBye ? 1.0 : seed <= byeSpots ? Math.min(0.95, playoffProbability * 0.75) : Math.max(0, playoffProbability * 0.2))
-      : 0
+    let byeProbability = 0
+    if (byeSpots > 0) {
+      if (hasClinchedBye) {
+        byeProbability = 1.0
+      } else if (isEliminatedFromBye) {
+        byeProbability = 0.0
+      } else if (byeChaserTeam) {
+        const byePointDiff = pointsFor - byeChaserTeam.pointsFor
+        const byeLead = effectiveWins - byeChaserTeam.effectiveWins
+        const zBye = (byeLead * (hasMedianMatch ? 0.8 : 1.4) + byePointDiff / 140) / Math.sqrt(Math.max(1, remainingWeeks))
+        byeProbability = Math.min(0.98, Math.max(0.02, 1 / (1 + Math.exp(-zBye))))
+      }
+    }
 
-    // Scenarios for upcoming week
+    // Clinch Scenarios
     const clinchThisWeekScenarios: string[] = []
+    const clinchByeThisWeekScenarios: string[] = []
     const eliminatedThisWeekScenarios: string[] = []
 
-    if (!hasMathematicallyClinchedPlayoff && !cannotCatchCutoff && remainingWeeks > 0) {
+    if (!hasClinchedPlayoff && !isEliminatedFromPlayoffs && remainingWeeks > 0) {
       if (magicNumber !== null && magicNumber <= gamesPerWeek * 2) {
         if (hasMedianMatch) {
-          clinchThisWeekScenarios.push(`2-0 Week (Win H2H + Beat Median) AND ${chaserTeam?.acc.name ?? 'Seed ' + (playoffSpots + 1)} loses at least 1 game`)
+          clinchThisWeekScenarios.push(`2-0 Week (Win H2H + Beat Median) AND ${chaserTeam?.acc.name ?? 'Seed 7'} loses at least 1 game`)
           if (magicNumber <= 2) {
-            clinchThisWeekScenarios.push(`1 Win this week AND ${chaserTeam?.acc.name ?? 'Seed ' + (playoffSpots + 1)} loses both games`)
+            clinchThisWeekScenarios.push(`1 Win this week AND ${chaserTeam?.acc.name ?? 'Seed 7'} loses both games`)
           }
         } else {
-          clinchThisWeekScenarios.push(`Win vs. Opponent AND Loss by ${chaserTeam?.acc.name ?? 'Seed ' + (playoffSpots + 1)}`)
+          clinchThisWeekScenarios.push(`Win vs. Opponent AND Loss by ${chaserTeam?.acc.name ?? 'Seed 7'}`)
         }
       }
     }
 
-    if (!hasMathematicallyClinchedPlayoff && !cannotCatchCutoff && remainingWeeks > 0) {
+    // Bye Clinch Scenario
+    if (byeSpots > 0 && !hasClinchedBye && !isEliminatedFromBye && remainingWeeks > 0) {
+      if (byeMagicNumber !== null && byeMagicNumber <= gamesPerWeek * 2) {
+        if (hasMedianMatch) {
+          clinchByeThisWeekScenarios.push(`2-0 Week (Win H2H + Beat Median) AND ${byeChaserTeam?.acc.name ?? 'Seed 3'} loses at least 1 game`)
+        } else {
+          clinchByeThisWeekScenarios.push(`Win vs. Opponent AND Loss by ${byeChaserTeam?.acc.name ?? 'Seed 3'}`)
+        }
+      }
+    }
+
+    // Elimination Scenario
+    if (!hasClinchedPlayoff && !isEliminatedFromPlayoffs && remainingWeeks > 0) {
       if (eliminationNumber !== null && eliminationNumber <= gamesPerWeek * 2) {
         if (hasMedianMatch) {
-          eliminatedThisWeekScenarios.push(`0-2 Week (Loss + Below Median) AND ${cutoffTeam?.acc.name ?? 'Seed ' + playoffSpots} wins at least 1 game`)
+          eliminatedThisWeekScenarios.push(`0-2 Week (Loss + Below Median) AND ${cutoffTeam?.acc.name ?? 'Seed 6'} wins at least 1 game`)
         } else {
-          eliminatedThisWeekScenarios.push(`Loss vs. Opponent AND Win by ${cutoffTeam?.acc.name ?? 'Seed ' + playoffSpots}`)
+          eliminatedThisWeekScenarios.push(`Loss vs. Opponent AND Win by ${cutoffTeam?.acc.name ?? 'Seed 6'}`)
         }
       }
     }
@@ -522,6 +586,7 @@ export function analyzeLeagueClinch(
       rosterId: entry.rosterId,
       name: acc.name,
       ownerDisplayName: acc.ownerName,
+      avatarUrl: acc.avatarUrl,
       seed,
       totalWins,
       totalLosses,
@@ -544,22 +609,35 @@ export function analyzeLeagueClinch(
       status,
       statusLabel,
       clinchMeter,
-      playoffProbability,
+
+      hasClinchedBye,
+      isEliminatedFromBye,
+      byeMagicNumber,
+      byeEliminationNumber,
       byeProbability,
+      byeMeter,
+      gamesBehindBye,
+
+      hasClinchedPlayoff,
+      isEliminatedFromPlayoffs,
       magicNumber,
       eliminationNumber,
+      playoffProbability,
       gamesBehindCutoff,
+
       maxPossibleWins,
       minPossibleWins,
       clinchThisWeekScenarios,
+      clinchByeThisWeekScenarios,
       eliminatedThisWeekScenarios,
       weeklyDetails: acc.weeklyDetails,
     }
   })
 
-  const clinchedCount = profiles.filter((p) => p.status === 'CLINCHED_PLAYOFF' || p.status === 'CLINCHED_BYE').length
-  const eliminatedCount = profiles.filter((p) => p.status === 'ELIMINATED').length
-  const bubbleCount = profiles.filter((p) => p.status === 'ON_THE_BUBBLE' || p.status === 'IN_THE_HUNT').length
+  const clinchedCount = profiles.filter((p) => p.hasClinchedPlayoff).length
+  const clinchedByeCount = profiles.filter((p) => p.hasClinchedBye).length
+  const eliminatedCount = profiles.filter((p) => p.isEliminatedFromPlayoffs).length
+  const bubbleCount = profiles.filter((p) => !p.hasClinchedPlayoff && !p.isEliminatedFromPlayoffs).length
 
   return {
     leagueId: data.league.league_id,
@@ -575,6 +653,7 @@ export function analyzeLeagueClinch(
     gamesPerWeek,
     remainingGamesPerTeam,
     clinchedCount,
+    clinchedByeCount,
     bubbleCount,
     eliminatedCount,
     teams: profiles,
