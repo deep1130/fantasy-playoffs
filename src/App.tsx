@@ -2,15 +2,12 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   Check,
   ChevronDown,
-  ChevronRight,
   CircleAlert,
   Clock3,
   Crown,
   Flame,
-  Lock,
   RefreshCw,
   RotateCcw,
-  Search,
   Share2,
   ShieldAlert,
   ShieldCheck,
@@ -27,8 +24,7 @@ import { getDemoLeagueData } from './demoData'
 import { loadLeagueData, type LeagueData } from './sleeper'
 import './App.css'
 
-type MainTab = 'clinch' | 'whatif' | 'scenarios'
-type FilterOption = 'ALL' | 'BYE' | 'CLINCHED' | 'IN_HUNT' | 'BUBBLE' | 'ELIMINATED'
+type MainTab = 'clinch' | 'whatif'
 
 const formatDec = (val: number, decimals = 1) =>
   val.toLocaleString('en-US', {
@@ -59,8 +55,8 @@ function getInitialLeagueId(): string {
 function getInitialTab(): MainTab {
   if (typeof window !== 'undefined') {
     const fromQuery = new URLSearchParams(window.location.search).get('tab')
-    if (fromQuery && ['clinch', 'whatif', 'scenarios'].includes(fromQuery)) {
-      return fromQuery as MainTab
+    if (fromQuery === 'whatif') {
+      return 'whatif'
     }
   }
   return 'clinch'
@@ -74,8 +70,6 @@ export function App() {
   const [busy, setBusy] = useState(Boolean(initialId))
   const [error, setError] = useState('')
   const [tab, setTab] = useState<MainTab>(initialTab)
-  const [filter, setFilter] = useState<FilterOption>('ALL')
-  const [search, setSearch] = useState('')
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
   const [copied, setCopied] = useState(false)
   const [includeLiveWeek, setIncludeLiveWeek] = useState<boolean>(false)
@@ -160,33 +154,8 @@ export function App() {
   }, [clinchSummary, selectedTeamRosterId])
 
   const filteredTeams = useMemo(() => {
-    if (!clinchSummary) return []
-    let list = clinchSummary.teams
-
-    if (search.trim()) {
-      const q = search.toLowerCase().trim()
-      list = list.filter(
-        (t) =>
-          t.name.toLowerCase().includes(q) ||
-          t.ownerDisplayName.toLowerCase().includes(q) ||
-          String(t.seed).includes(q),
-      )
-    }
-
-    if (filter === 'BYE') {
-      list = list.filter((t) => t.seed <= clinchSummary.byeSpots || t.hasClinchedBye)
-    } else if (filter === 'CLINCHED') {
-      list = list.filter((t) => t.hasClinchedPlayoff || t.hasClinchedBye)
-    } else if (filter === 'IN_HUNT') {
-      list = list.filter((t) => t.status === 'IN_THE_HUNT' || t.status === 'IN_CONTROL' || t.status === 'BYE_FAVORITE')
-    } else if (filter === 'BUBBLE') {
-      list = list.filter((t) => t.status === 'ON_THE_BUBBLE')
-    } else if (filter === 'ELIMINATED') {
-      list = list.filter((t) => t.isEliminatedFromPlayoffs)
-    }
-
-    return list
-  }, [clinchSummary, search, filter])
+    return clinchSummary?.teams ?? []
+  }, [clinchSummary])
 
   // What-If Pick Handlers
   function handlePickWinner(week: number, matchupId: number, winnerRosterId: number) {
@@ -419,21 +388,21 @@ export function App() {
     if (team.hasClinchedBye) {
       return (
         <span className="status-pill status-clinched-bye" title="Clinched top-2 first round bye">
-          <Crown size={11} /> Clinched Bye 👑
+          <Crown size={11} /> Clinched Bye
         </span>
       )
     }
     if (team.hasClinchedPlayoff) {
       return (
         <span className="status-pill status-clinched-playoff" title="Clinched top-6 playoff spot">
-          <Check size={11} /> Clinched Playoff 🔒
+          <Check size={11} /> Clinched Playoff
         </span>
       )
     }
     if (team.isEliminatedFromPlayoffs) {
       return (
         <span className="status-pill status-eliminated" title="Mathematically eliminated from playoffs">
-          Eliminated ✕
+          Eliminated
         </span>
       )
     }
@@ -472,13 +441,49 @@ export function App() {
     )
   }
 
-  function renderMobileTeamCard(
-    team: TeamClinchProfile,
-    mode: 'clinch' | 'scenarios' = 'clinch'
-  ) {
+  function renderMobileTeamCard(team: TeamClinchProfile) {
     const isBye = team.seed <= byeSpots
     const isPlayoff = team.seed <= playoffSpots
-    const isScenarios = mode === 'scenarios'
+
+    const playoffPrimary = team.hasClinchedPlayoff
+      ? 'Clinched'
+      : team.isEliminatedFromPlayoffs
+      ? 'Eliminated'
+      : team.magicNumber !== null
+      ? `M: ${team.magicNumber}`
+      : team.eliminationNumber !== null
+      ? `E: ${team.eliminationNumber}`
+      : '—'
+
+    const playoffSub = team.hasClinchedPlayoff
+      ? 'Top 6 Locked'
+      : team.isEliminatedFromPlayoffs
+      ? `Max ${team.maxPossibleWins}W`
+      : team.fastestPlayoffClinchWeek
+      ? `Lock: Wk ${team.fastestPlayoffClinchWeek}`
+      : team.fastestPlayoffElimWeek
+      ? `Elim: Wk ${team.fastestPlayoffElimWeek}`
+      : `Max ${team.maxPossibleWins}W`
+
+    const byePrimary = team.hasClinchedBye
+      ? 'Clinched'
+      : team.isEliminatedFromBye
+      ? 'Out'
+      : team.byeMagicNumber !== null
+      ? `M: ${team.byeMagicNumber}`
+      : team.byeEliminationNumber !== null
+      ? `E: ${team.byeEliminationNumber}`
+      : '—'
+
+    const byeSub = team.hasClinchedBye
+      ? 'Top 2 Locked'
+      : team.isEliminatedFromBye
+      ? 'Out of Top 2'
+      : team.fastestByeClinchWeek
+      ? `Lock: Wk ${team.fastestByeClinchWeek}`
+      : team.fastestByeElimWeek
+      ? `Elim: Wk ${team.fastestByeElimWeek}`
+      : `${formatPct(team.byeProbability)} Bye`
 
     return (
       <div
@@ -489,9 +494,7 @@ export function App() {
       >
         <div className="m-card-header">
           <div className="m-card-identity">
-            <span className={`pick-number ${isBye ? 'bye-number' : isPlayoff ? '' : 'lottery-number'}`}>
-              {String(team.seed).padStart(2, '0')}
-            </span>
+            <span className="m-card-rank">#{team.seed}</span>
             {team.avatarUrl ? (
               <img
                 src={team.avatarUrl}
@@ -512,24 +515,17 @@ export function App() {
               <span className="team-sub">{team.ownerDisplayName}</span>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            {renderStatusPill(team)}
-            <ChevronRight size={14} color="var(--muted)" />
-          </div>
+          {renderStatusPill(team)}
         </div>
 
         {hasMedian && (
           <div className="m-card-records-strip">
             <div className="m-record-chip">
-              <span className="m-chip-lbl">Record:</span>
-              <span className="m-chip-val">{team.totalWins}–{team.totalLosses}</span>
-            </div>
-            <div className="m-record-chip">
-              <span className="m-chip-lbl">H2H:</span>
+              <span className="m-chip-lbl">Head to Head:</span>
               <span className="m-chip-val">{team.h2hWins}–{team.h2hLosses}</span>
             </div>
             <div className="m-record-chip">
-              <span className="m-chip-lbl">Med:</span>
+              <span className="m-chip-lbl">Median:</span>
               <span className="m-chip-val">{team.medianWins}–{team.medianLosses}</span>
             </div>
           </div>
@@ -537,68 +533,45 @@ export function App() {
 
         <div className="m-card-metrics-grid">
           <div className="m-metric-cell highlight">
-            <span className="m-metric-label">{isScenarios ? 'WIN RANGE' : 'POINTS FOR'}</span>
+            <span className="m-metric-label">ACTUAL W–L</span>
+            <strong className="m-metric-val accent">
+              {team.totalWins}–{team.totalLosses}
+            </strong>
+            <span className="m-metric-sub">
+              {Math.round(team.winPercentage * 100)}% win rate
+            </span>
+          </div>
+
+          <div className="m-metric-cell">
+            <span className="m-metric-label">PLAYOFF CLINCH</span>
+            <strong className="m-metric-val">{playoffPrimary}</strong>
+            <span className="m-metric-sub">{playoffSub}</span>
+          </div>
+
+          <div className="m-metric-cell">
+            <span className="m-metric-label">BYE RACE (TOP 2)</span>
+            <strong className="m-metric-val">{byePrimary}</strong>
+            <span className="m-metric-sub">{byeSub}</span>
+          </div>
+
+          <div className="m-metric-cell">
+            <span className="m-metric-label">PLAYOFF ODDS</span>
+            <strong className="m-metric-val">{formatPct(team.playoffProbability)}</strong>
+            <span className="m-metric-sub">{formatPct(team.byeProbability)} Bye</span>
+          </div>
+
+          <div className="m-metric-cell">
+            <span className="m-metric-label">WIN RANGE</span>
             <strong className="m-metric-val">
-              {isScenarios ? `${team.minPossibleWins}–${team.maxPossibleWins}W` : formatDec(team.pointsFor, 1)}
+              {team.minPossibleWins}–{team.maxPossibleWins} W
             </strong>
+            <span className="m-metric-sub">Floor – Ceiling</span>
           </div>
 
           <div className="m-metric-cell">
-            <span className="m-metric-label">
-              {team.hasClinchedPlayoff || team.magicNumber !== null ? 'PLAYOFF M#' : 'PLAYOFF E#'}
-            </span>
-            <div className="m-metric-val">
-              {team.hasClinchedPlayoff ? (
-                <span className="magic-badge locked"><Lock size={9} /> LOCKED</span>
-              ) : team.isEliminatedFromPlayoffs ? (
-                <span className="elim-badge out">ELIM</span>
-              ) : team.magicNumber !== null ? (
-                <span className="magic-badge active">M: {team.magicNumber}</span>
-              ) : team.eliminationNumber !== null ? (
-                <span className="elim-badge active">E: {team.eliminationNumber}</span>
-              ) : (
-                '—'
-              )}
-            </div>
-          </div>
-
-          <div className="m-metric-cell">
-            <span className="m-metric-label">
-              {isBye
-                ? 'BYE M#'
-                : team.fastestPlayoffClinchWeek
-                ? 'EARLIEST LOCK'
-                : team.fastestPlayoffElimWeek
-                ? 'EARLIEST ELIM'
-                : 'EARLIEST TIMING'}
-            </span>
-            <div className="m-metric-val">
-              {isBye ? (
-                team.hasClinchedBye ? (
-                  <span className="magic-badge locked" style={{ color: '#fbbf24' }}><Lock size={9} /> LOCKED</span>
-                ) : team.byeMagicNumber !== null ? (
-                  <span className="magic-badge active" style={{ color: '#f59e0b' }}>M: {team.byeMagicNumber}</span>
-                ) : (
-                  '—'
-                )
-              ) : team.fastestPlayoffClinchWeek ? (
-                <span style={{ color: '#38bdf8', fontWeight: 600 }}>Wk {team.fastestPlayoffClinchWeek}</span>
-              ) : team.fastestPlayoffElimWeek ? (
-                <span style={{ color: '#f87171', fontWeight: 600 }}>Wk {team.fastestPlayoffElimWeek}</span>
-              ) : (
-                '—'
-              )}
-            </div>
-          </div>
-
-          <div className="m-metric-cell">
-            <span className="m-metric-label">{isScenarios ? 'POINTS FOR' : 'PLAYOFF ODDS'}</span>
-            <strong
-              className="m-metric-val"
-              style={!isScenarios ? { color: team.playoffProbability >= 0.7 ? '#34d399' : team.playoffProbability >= 0.35 ? '#38bdf8' : 'var(--muted)' } : {}}
-            >
-              {isScenarios ? formatDec(team.pointsFor, 1) : formatPct(team.playoffProbability)}
-            </strong>
+            <span className="m-metric-label">POINTS FOR</span>
+            <strong className="m-metric-val">{formatDec(team.pointsFor, 1)}</strong>
+            <span className="m-metric-sub">Tiebreaker</span>
           </div>
         </div>
       </div>
@@ -615,9 +588,7 @@ export function App() {
       >
         <div className="m-card-header">
           <div className="m-card-identity">
-            <span className={`pick-number ${isBye ? 'bye-number' : isPlayoff ? '' : 'lottery-number'}`}>
-              {String(idx + 1).padStart(2, '0')}
-            </span>
+            <span className="m-card-rank">#{idx + 1}</span>
             <div className="team-meta">
               <span className="team-title">{team.name}</span>
               <span className="team-sub">Originally Seed #{team.originalSeed}</span>
@@ -648,11 +619,9 @@ export function App() {
           </div>
           <div className="m-metric-cell">
             <span className="m-metric-label">SEED SHIFT</span>
-            <div className="m-metric-val">
-              <span className={`delta-pill ${team.seedDelta > 0 ? 'up' : team.seedDelta < 0 ? 'down' : 'same'}`}>
-                {team.seedDelta > 0 ? `▲ +${team.seedDelta}` : team.seedDelta < 0 ? `▼ ${team.seedDelta}` : '0'}
-              </span>
-            </div>
+            <strong className="m-metric-val">
+              {team.seedDelta > 0 ? `+${team.seedDelta}` : team.seedDelta < 0 ? `${team.seedDelta}` : 'Even'}
+            </strong>
             <span className="m-metric-sub">From Seed #{team.originalSeed}</span>
           </div>
           <div className="m-metric-cell">
@@ -865,26 +834,15 @@ export function App() {
         <div className="section-heading">
           <div>
             <p className="eyebrow">
-              POSTSEASON INTELLIGENCE <span>·</span> {clinchSummary ? clinchSummary.leagueName.toUpperCase() : 'PLAYOFF RACE'}
+              POSTSEASON INTELLIGENCE <span>·</span> {clinchSummary ? `${totalTeams} TEAMS` : 'PLAYOFF RACE'}
             </p>
             <h2>
-              {tab === 'clinch' && 'Playoff Standings & Clinch Radar'}
+              {tab === 'clinch' && 'Playoff Standings & Clinch Math'}
               {tab === 'whatif' && 'Interactive What-If Playoff Machine'}
-              {tab === 'scenarios' && 'Postseason Clinch & Elimination Timetable'}
             </h2>
           </div>
 
           <div className="board-tools">
-            <div className="search-box">
-              <Search size={14} />
-              <input
-                type="text"
-                placeholder="Filter teams…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-
             <div className="view-tabs" role="tablist">
               <button
                 type="button"
@@ -900,63 +858,13 @@ export function App() {
                 onClick={() => setTab('whatif')}
               >
                 <Flame size={12} />
-                <span>What-If</span>
-              </button>
-              <button
-                type="button"
-                className={tab === 'scenarios' ? 'selected' : ''}
-                onClick={() => setTab('scenarios')}
-              >
-                <Target size={12} />
-                <span>Scenarios</span>
+                <span>What-If Machine</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Status Filter Chips */}
-        {(tab === 'clinch' || tab === 'scenarios') && clinchSummary && (
-          <div className="filter-chips-row">
-            <span className="filter-label">FILTER:</span>
-            <button
-              type="button"
-              className={`filter-chip ${filter === 'ALL' ? 'active' : ''}`}
-              onClick={() => setFilter('ALL')}
-            >
-              ALL ({totalTeams})
-            </button>
-            <button
-              type="button"
-              className={`filter-chip ${filter === 'BYE' ? 'active' : ''}`}
-              onClick={() => setFilter('BYE')}
-            >
-              👑 BYE RACE ({clinchSummary.teams.filter((t) => t.seed <= byeSpots || t.hasClinchedBye).length})
-            </button>
-            <button
-              type="button"
-              className={`filter-chip ${filter === 'CLINCHED' ? 'active' : ''}`}
-              onClick={() => setFilter('CLINCHED')}
-            >
-              🔒 CLINCHED ({clinchSummary.clinchedCount + clinchSummary.clinchedByeCount})
-            </button>
-            <button
-              type="button"
-              className={`filter-chip ${filter === 'IN_HUNT' ? 'active' : ''}`}
-              onClick={() => setFilter('IN_HUNT')}
-            >
-              ⚡ IN HUNT ({clinchSummary.teams.filter((t) => t.status === 'IN_THE_HUNT' || t.status === 'IN_CONTROL' || t.status === 'BYE_FAVORITE').length})
-            </button>
-            <button
-              type="button"
-              className={`filter-chip ${filter === 'ELIMINATED' ? 'active' : ''}`}
-              onClick={() => setFilter('ELIMINATED')}
-            >
-              ✕ ELIMINATED ({clinchSummary.eliminatedCount})
-            </button>
-          </div>
-        )}
-
-        {/* VIEW 1: CLINCH RADAR (Main Standings with Focused Columns) */}
+        {/* VIEW 1: STANDINGS & CLINCH MATH */}
         {tab === 'clinch' && (
           <>
             <div className="desktop-table-view">
@@ -966,13 +874,13 @@ export function App() {
                     <tr>
                       <th className="th-rank">#</th>
                       <th>FRANCHISE</th>
-                      <th>RECORD</th>
-                      <th>PLAYOFF STATUS</th>
-                      <th title="Magic Number (M) for top 6 to clinch, or Elimination Number (E) for seeds 7+">MAGIC / ELIM #</th>
-                      <th title="Earliest week team can mathematically clinch (top 6) or be eliminated (seeds 7+)">EARLIEST LOCK / ELIM</th>
-                      <th title="Probability of qualifying for the top-6 playoffs">PLAYOFF ODDS</th>
-                      <th title="Points For (Primary Tiebreaker)">POINTS FOR</th>
-                      <th style={{ textAlign: 'center' }}>CLINCH PATH</th>
+                      <th>ACTUAL W–L</th>
+                      <th>STATUS</th>
+                      <th title="Magic Number (M) for top 6 to clinch, or Elimination Number (E) for seeds 7+">PLAYOFF CLINCH</th>
+                      <th title="Magic Number (M) for top 2 to clinch a first-round bye, or Elimination Number (E) for seeds 3+">BYE RACE (TOP 2)</th>
+                      <th title="Mathematical win floor and ceiling across remaining weeks">WIN RANGE</th>
+                      <th title="Playoff and First-Round Bye probabilities">POSTSEASON ODDS</th>
+                      <th title="Total Starter Points For (Primary Tiebreaker)">POINTS FOR</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -989,24 +897,60 @@ export function App() {
                     {!busy && filteredTeams.length === 0 && (
                       <tr>
                         <td colSpan={9} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--muted)', font: '12px var(--mono)' }}>
-                          {clinchSummary ? (
-                            'No teams match your current filter.'
-                          ) : (
-                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px' }}>
-                              <span>Enter a Sleeper League ID above to decode playoff clinches.</span>
-                              <button type="button" className="view-path-btn" onClick={handleLoadDemo}>
-                                Try Demo League →
-                              </button>
-                            </div>
-                          )}
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px' }}>
+                            <span>Enter a Sleeper League ID above to decode playoff clinches.</span>
+                            <button type="button" className="view-path-btn" onClick={handleLoadDemo}>
+                              Try Demo League →
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     )}
                     {!busy && filteredTeams.map((team) => {
                       const isByeRow = team.seed <= byeSpots
                       const isPlayoffRow = team.seed <= playoffSpots
-                      const showByeDivider = team.seed === byeSpots && filter === 'ALL'
-                      const showPlayoffDivider = team.seed === playoffSpots && filter === 'ALL'
+                      const showByeDivider = team.seed === byeSpots
+                      const showPlayoffDivider = team.seed === playoffSpots
+
+                      const playoffPrimary = team.hasClinchedPlayoff
+                        ? 'Clinched'
+                        : team.isEliminatedFromPlayoffs
+                        ? 'Eliminated'
+                        : team.magicNumber !== null
+                        ? `M: ${team.magicNumber}`
+                        : team.eliminationNumber !== null
+                        ? `E: ${team.eliminationNumber}`
+                        : '—'
+
+                      const playoffSub = team.hasClinchedPlayoff
+                        ? 'Top 6 Locked'
+                        : team.isEliminatedFromPlayoffs
+                        ? `Max ${team.maxPossibleWins}W`
+                        : team.fastestPlayoffClinchWeek
+                        ? `Earliest Lock: Wk ${team.fastestPlayoffClinchWeek}`
+                        : team.fastestPlayoffElimWeek
+                        ? `Earliest Elim: Wk ${team.fastestPlayoffElimWeek}`
+                        : '—'
+
+                      const byePrimary = team.hasClinchedBye
+                        ? 'Clinched'
+                        : team.isEliminatedFromBye
+                        ? 'Out'
+                        : team.byeMagicNumber !== null
+                        ? `M: ${team.byeMagicNumber}`
+                        : team.byeEliminationNumber !== null
+                        ? `E: ${team.byeEliminationNumber}`
+                        : '—'
+
+                      const byeSub = team.hasClinchedBye
+                        ? 'Top 2 Locked'
+                        : team.isEliminatedFromBye
+                        ? 'Cannot reach Top 2'
+                        : team.fastestByeClinchWeek
+                        ? `Earliest Lock: Wk ${team.fastestByeClinchWeek}`
+                        : team.fastestByeElimWeek
+                        ? `Earliest Elim: Wk ${team.fastestByeElimWeek}`
+                        : '—'
 
                       return (
                         <Fragment key={team.rosterId}>
@@ -1014,12 +958,9 @@ export function App() {
                             className={`standings-row ${isByeRow ? 'bye-row' : isPlayoffRow ? 'playoff-row' : 'lottery-row'}`}
                             onClick={() => setSelectedTeamRosterId(team.rosterId)}
                             style={{ cursor: 'pointer' }}
+                            title={`Click to view scenario details and remaining schedule for ${team.name}`}
                           >
-                            <td className="td-rank">
-                              <span className={`pick-number ${isByeRow ? 'bye-number' : isPlayoffRow ? '' : 'lottery-number'}`}>
-                                {String(team.seed).padStart(2, '0')}
-                              </span>
-                            </td>
+                            <td className="td-rank">{team.seed}</td>
 
                             <td>
                               <div className="team-cell">
@@ -1042,20 +983,19 @@ export function App() {
                                   <span className="team-title" title={team.name}>
                                     {team.name}
                                   </span>
-                                  <span className="team-sub">
-                                    {team.ownerDisplayName}
-                                    {hasMedian && (
-                                      <span> · {team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med</span>
-                                    )}
-                                  </span>
+                                  <span className="team-sub">{team.ownerDisplayName}</span>
                                 </div>
                               </div>
                             </td>
 
-                            <td className="record-cell">
+                            <td>
                               <div className="stat-primary">
-                                <strong>{team.totalWins}–{team.totalLosses}</strong>
-                                <span className="stat-sub">{Math.round(team.winPercentage * 100)}% Win Rate</span>
+                                <strong>{team.totalWins} – {team.totalLosses}</strong>
+                                <span className="stat-sub">
+                                  {hasMedian
+                                    ? `${team.h2hWins}-${team.h2hLosses} H2H · ${team.medianWins}-${team.medianLosses} Median`
+                                    : `${Math.round(team.winPercentage * 100)}% Win Rate`}
+                                </span>
                               </div>
                             </td>
 
@@ -1063,103 +1003,55 @@ export function App() {
                               {renderStatusPill(team)}
                             </td>
 
-                            {/* Playoff Magic Number or Elimination Number */}
-                            <td className="magic-cell">
-                              {team.hasClinchedPlayoff ? (
-                                <span className="magic-badge locked"><Lock size={10} /> CLINCHED</span>
-                              ) : team.isEliminatedFromPlayoffs ? (
-                                <span className="elim-badge out">ELIMINATED</span>
-                              ) : team.magicNumber !== null ? (
-                                <div className="stat-primary">
-                                  <span className="magic-badge active">M: {team.magicNumber}</span>
-                                  {isByeRow && team.byeMagicNumber !== null && (
-                                    <span className="stat-sub" style={{ color: '#f59e0b', fontSize: '9px' }}>
-                                      Bye M: {team.byeMagicNumber}
-                                    </span>
-                                  )}
-                                </div>
-                              ) : team.eliminationNumber !== null ? (
-                                <div className="stat-primary">
-                                  <span className="elim-badge active">E: {team.eliminationNumber}</span>
-                                  <span className="stat-sub" style={{ fontSize: '9px' }}>
-                                    Max: {team.maxPossibleWins}W
-                                  </span>
-                                </div>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
+                            {/* Playoff Clinch */}
+                            <td>
+                              <div className="stat-primary">
+                                <strong>{playoffPrimary}</strong>
+                                <span className="stat-sub">{playoffSub}</span>
+                              </div>
                             </td>
 
-                            {/* Earliest Clinch or Earliest Elimination Week */}
-                            <td className="elim-cell">
-                              {team.hasClinchedPlayoff ? (
-                                <span className="scenario-pill" style={{ marginTop: 0, background: 'rgba(16,185,129,0.15)', color: '#34d399', borderColor: 'rgba(16,185,129,0.3)' }}>
-                                  🔒 Locked
-                                </span>
-                              ) : team.isEliminatedFromPlayoffs ? (
-                                <span className="elim-badge out">OUT</span>
-                              ) : team.fastestPlayoffClinchWeek ? (
-                                <div className="stat-primary">
-                                  <span className="scenario-pill" style={{ marginTop: 0 }}>
-                                    ⚡ Lock: Wk {team.fastestPlayoffClinchWeek}
-                                  </span>
-                                  {isByeRow && team.fastestByeClinchWeek && (
-                                    <span className="stat-sub" style={{ color: '#fbbf24', fontSize: '9px' }}>
-                                      👑 Bye: Wk {team.fastestByeClinchWeek}
-                                    </span>
-                                  )}
-                                </div>
-                              ) : team.fastestPlayoffElimWeek ? (
-                                <div className="stat-primary">
-                                  <span className="elim-week-pill">
-                                    🚨 Elim: Wk {team.fastestPlayoffElimWeek}
-                                  </span>
-                                  <span className="stat-sub" style={{ fontSize: '9px' }}>
-                                    {team.gamesBehindCutoff === 0 ? 'Tied w/ #6' : `-${team.gamesBehindCutoff.toFixed(0)}G vs #6`}
-                                  </span>
-                                </div>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
+                            {/* Bye Race */}
+                            <td>
+                              <div className="stat-primary">
+                                <strong>{byePrimary}</strong>
+                                <span className="stat-sub">{byeSub}</span>
+                              </div>
                             </td>
 
-                            {/* Playoff Probability with mini-bar */}
-                            <td className="odds-cell">
-                              <div className="odds-wrap">
-                                <span className="odds-val">{formatPct(team.playoffProbability)}</span>
-                                <div className="odds-track">
-                                  <div
-                                    className={`odds-fill ${team.playoffProbability >= 0.8 ? 'high' : team.playoffProbability >= 0.4 ? 'mid' : 'low'}`}
-                                    style={{ width: `${Math.round(team.playoffProbability * 100)}%` }}
-                                  />
-                                </div>
+                            {/* Win Range */}
+                            <td>
+                              <div className="stat-primary">
+                                <strong>{team.minPossibleWins} – {team.maxPossibleWins} W</strong>
+                                <span className="stat-sub">{Math.round(team.winPercentage * 100)}% Win Rate</span>
+                              </div>
+                            </td>
+
+                            {/* Postseason Odds */}
+                            <td>
+                              <div className="stat-primary">
+                                <strong>{formatPct(team.playoffProbability)} Playoff</strong>
+                                <span className="stat-sub">{formatPct(team.byeProbability)} Bye</span>
                               </div>
                             </td>
 
                             {/* Points For */}
-                            <td className="numeric-cell">
-                              <strong style={{ fontFamily: 'var(--mono)' }}>{formatDec(team.pointsFor, 1)}</strong>
-                            </td>
-
-                            {/* Scenarios Action */}
-                            <td style={{ textAlign: 'center' }}>
-                              <button
-                                type="button"
-                                className="scenario-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setSelectedTeamRosterId(team.rosterId)
-                                }}
-                              >
-                                View Path <ChevronRight size={11} />
-                              </button>
+                            <td>
+                              <div className="stat-primary">
+                                <strong>{formatDec(team.pointsFor, 1)}</strong>
+                                <span className="stat-sub">
+                                  {team.h2hWins + team.h2hLosses > 0
+                                    ? `${formatDec(team.pointsFor / (team.h2hWins + team.h2hLosses), 1)}/wk`
+                                    : 'Tiebreaker'}
+                                </span>
+                              </div>
                             </td>
                           </tr>
 
                           {showByeDivider && (
                             <tr className="cutoff-line-bye">
                               <td colSpan={9}>
-                                👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS)
+                                TOP 2 SEEDS EARN FIRST-ROUND BYE (ADVANCE TO SEMIFINALS)
                               </td>
                             </tr>
                           )}
@@ -1167,7 +1059,7 @@ export function App() {
                           {showPlayoffDivider && (
                             <tr className="cutoff-line-playoff">
                               <td colSpan={9}>
-                                ▲ TOP 6 QUALIFY FOR PLAYOFFS  |  BUBBLE CUTOFF LINE ▼
+                                PLAYOFF CUTOFF — TOP 6 SEEDS QUALIFY FOR POSTSEASON
                               </td>
                             </tr>
                           )}
@@ -1183,23 +1075,21 @@ export function App() {
             <div className="mobile-cards-view">
               {filteredTeams.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--muted)', font: '12px var(--mono)', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--line)' }}>
-                  {clinchSummary ? 'No teams match your current filter.' : 'Enter a Sleeper League ID above to decode playoff clinches.'}
+                  Enter a Sleeper League ID above to decode playoff clinches.
                 </div>
               ) : (
                 <div className="m-standings-card-list">
                   {filteredTeams.map((team) => (
                     <Fragment key={team.rosterId}>
-                      {renderMobileTeamCard(team, 'clinch')}
-                      {team.seed === byeSpots && filter === 'ALL' && (
+                      {renderMobileTeamCard(team)}
+                      {team.seed === byeSpots && (
                         <div className="m-cutoff-divider bye">
-                          <Crown size={13} />
-                          <span>👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (SEMIFINALS) ▼</span>
+                          <span>TOP 2 SEEDS EARN FIRST-ROUND BYE</span>
                         </div>
                       )}
-                      {team.seed === playoffSpots && filter === 'ALL' && (
+                      {team.seed === playoffSpots && (
                         <div className="m-cutoff-divider playoff">
-                          <Target size={13} />
-                          <span>▲ TOP 6 QUALIFY FOR PLAYOFFS | BUBBLE CUTOFF LINE ▼</span>
+                          <span>PLAYOFF CUTOFF — TOP 6 SEEDS QUALIFY</span>
                         </div>
                       )}
                     </Fragment>
@@ -1442,17 +1332,13 @@ export function App() {
                         return (
                           <Fragment key={team.rosterId}>
                             <tr className={`standings-row ${isBye ? 'bye-row' : isPlayoff ? 'playoff-row' : 'lottery-row'}`}>
-                              <td className="td-rank">
-                                <span className={`pick-number ${isBye ? 'bye-number' : isPlayoff ? '' : 'lottery-number'}`}>
-                                  {String(idx + 1).padStart(2, '0')}
-                                </span>
-                              </td>
+                              <td className="td-rank">{idx + 1}</td>
 
                               <td>
                                 {team.seedDelta > 0 ? (
-                                  <span className="delta-pill up">▲ +{team.seedDelta}</span>
+                                  <span className="delta-pill up">+{team.seedDelta}</span>
                                 ) : team.seedDelta < 0 ? (
-                                  <span className="delta-pill down">▼ {team.seedDelta}</span>
+                                  <span className="delta-pill down">{team.seedDelta}</span>
                                 ) : (
                                   <span className="delta-pill same">—</span>
                                 )}
@@ -1521,7 +1407,7 @@ export function App() {
                             {showByeDivider && (
                               <tr className="cutoff-line-bye">
                                 <td colSpan={6}>
-                                  👑 TOP 2 FIRST-ROUND PLAYOFF BYE CUTOFF
+                                  TOP 2 SEEDS EARN FIRST-ROUND BYE
                                 </td>
                               </tr>
                             )}
@@ -1529,7 +1415,7 @@ export function App() {
                             {showPlayoffDivider && (
                               <tr className="cutoff-line-playoff">
                                 <td colSpan={6}>
-                                  ▲ TOP 6 PLAYOFF QUALIFIED | BUBBLE CUTOFF ▼
+                                  PLAYOFF CUTOFF — TOP 6 SEEDS QUALIFY
                                 </td>
                               </tr>
                             )}
@@ -1549,229 +1435,18 @@ export function App() {
                       {renderMobileSimTeamCard(team, idx)}
                       {idx === byeSpots - 1 && (
                         <div className="m-cutoff-divider bye">
-                          <Crown size={13} />
-                          <span>👑 TOP 2 FIRST-ROUND PLAYOFF BYE CUTOFF</span>
+                          <span>TOP 2 SEEDS EARN FIRST-ROUND BYE</span>
                         </div>
                       )}
                       {idx === playoffSpots - 1 && (
                         <div className="m-cutoff-divider playoff">
-                          <Target size={13} />
-                          <span>▲ TOP 6 PLAYOFF QUALIFIED | BUBBLE CUTOFF ▼</span>
+                          <span>PLAYOFF CUTOFF — TOP 6 SEEDS QUALIFY</span>
                         </div>
                       )}
                     </Fragment>
                   ))}
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW 3: CLINCH SCENARIOS TIMETABLE */}
-        {tab === 'scenarios' && (
-          <div className="scenarios-view">
-            {/* Timetable Table - Desktop View (> 820px) */}
-            <div className="desktop-table-view">
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th className="th-rank">SEED</th>
-                      <th>FRANCHISE</th>
-                      <th>RECORD</th>
-                      <th title="Mathematical win ceiling (winning out) and floor (losing out)">WIN CEILING / FLOOR</th>
-                      <th>PLAYOFF M# / E#</th>
-                      <th>EARLIEST PLAYOFF LOCK / ELIM</th>
-                      <th>BYE M# / E#</th>
-                      <th>EARLIEST BYE LOCK / ELIM</th>
-                      <th style={{ textAlign: 'right' }}>CLINCH DEEP DIVE</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTeams.map((team) => {
-                      const isCutoffRow = team.seed === clinchSummary?.playoffSpots && filter === 'ALL'
-                      const isByeRow = team.seed === clinchSummary?.byeSpots && filter === 'ALL'
-                      return (
-                        <Fragment key={team.rosterId}>
-                          <tr
-                            onClick={() => setSelectedTeamRosterId(team.rosterId)}
-                            style={{ cursor: 'pointer' }}
-                            title={`Click to view complete scenario breakdown for ${team.name}`}
-                          >
-                            <td className="td-rank">
-                              <span className={`pick-number ${team.seed <= byeSpots ? 'bye-number' : team.seed <= playoffSpots ? '' : 'lottery-number'}`}>
-                                {String(team.seed).padStart(2, '0')}
-                              </span>
-                            </td>
-                            <td>
-                              <div className="team-cell">
-                                {team.avatarUrl ? (
-                                  <img
-                                    src={team.avatarUrl}
-                                    alt={team.name}
-                                    className="team-avatar"
-                                    loading="lazy"
-                                    onError={(e) => {
-                                      e.currentTarget.style.display = 'none'
-                                    }}
-                                  />
-                                ) : (
-                                  <div className="team-avatar-fallback">
-                                    {team.name.charAt(0).toUpperCase()}
-                                  </div>
-                                )}
-                                <div className="team-meta">
-                                  <span className="team-title">{team.name}</span>
-                                  <span className="team-sub">{team.ownerDisplayName}</span>
-                                </div>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stat-primary">
-                                <strong>{team.totalWins}–{team.totalLosses}</strong>
-                                <span className="stat-sub">
-                                  {team.h2hWins}-{team.h2hLosses} H2H · {team.medianWins}-{team.medianLosses} Med
-                                </span>
-                              </div>
-                            </td>
-                            <td>
-                              <div className="stat-primary">
-                                <strong style={{ fontSize: '12px', color: '#34d399' }}>Max: {team.maxPossibleWins}W</strong>
-                                <span className="stat-sub">Floor: {team.minPossibleWins}W</span>
-                              </div>
-                            </td>
-                            <td className="magic-cell">
-                              {team.hasClinchedPlayoff ? (
-                                <span className="magic-badge locked"><Lock size={10} /> CLINCHED</span>
-                              ) : team.isEliminatedFromPlayoffs ? (
-                                <span className="elim-badge out">ELIM</span>
-                              ) : team.magicNumber !== null ? (
-                                <span className="magic-badge active">M: {team.magicNumber}</span>
-                              ) : team.eliminationNumber !== null ? (
-                                <span className="elim-badge active">E: {team.eliminationNumber}</span>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
-                            </td>
-                            <td>
-                              {team.hasClinchedPlayoff ? (
-                                <span className="scenario-pill" style={{ marginTop: 0, background: 'rgba(16,185,129,0.15)', color: '#34d399', borderColor: 'rgba(16,185,129,0.3)' }}>
-                                  🔒 Locked
-                                </span>
-                              ) : team.isEliminatedFromPlayoffs ? (
-                                <span className="elim-badge out">ELIMINATED</span>
-                              ) : team.fastestPlayoffClinchWeek ? (
-                                <span className="scenario-pill" style={{ marginTop: 0 }}>
-                                  ⚡ Lock: Week {team.fastestPlayoffClinchWeek}
-                                </span>
-                              ) : team.fastestPlayoffElimWeek ? (
-                                <span className="elim-week-pill">
-                                  🚨 Elim: Week {team.fastestPlayoffElimWeek}
-                                </span>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
-                            </td>
-                            <td>
-                              {team.hasClinchedBye ? (
-                                <span className="magic-badge locked" style={{ borderColor: 'rgba(245,158,11,0.4)', color: '#fbbf24' }}>
-                                  👑 CLINCHED
-                                </span>
-                              ) : team.isEliminatedFromBye ? (
-                                <span className="elim-badge out" style={{ opacity: 0.6 }}>BYE OUT</span>
-                              ) : team.byeMagicNumber !== null ? (
-                                <span className="magic-badge active" style={{ color: '#f59e0b', borderColor: 'rgba(245,158,11,0.4)', background: 'rgba(245,158,11,0.12)' }}>
-                                  Bye M: {team.byeMagicNumber}
-                                </span>
-                              ) : team.byeEliminationNumber !== null ? (
-                                <span className="elim-badge active">
-                                  Bye E: {team.byeEliminationNumber}
-                                </span>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
-                            </td>
-                            <td>
-                              {team.hasClinchedBye ? (
-                                <span className="scenario-pill bye" style={{ marginTop: 0 }}>👑 Locked</span>
-                              ) : team.isEliminatedFromBye ? (
-                                <span className="elim-badge out">OUT</span>
-                              ) : team.fastestByeClinchWeek ? (
-                                <span className="scenario-pill bye" style={{ marginTop: 0 }}>
-                                  👑 Lock: Week {team.fastestByeClinchWeek}
-                                </span>
-                              ) : team.fastestByeElimWeek ? (
-                                <span className="elim-week-pill">
-                                  🚨 Bye Elim: Week {team.fastestByeElimWeek}
-                                </span>
-                              ) : (
-                                <span className="stat-sub">—</span>
-                              )}
-                            </td>
-                            <td style={{ textAlign: 'right' }}>
-                              <button
-                                type="button"
-                                className="view-path-btn"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setSelectedTeamRosterId(team.rosterId)
-                                }}
-                              >
-                                View Path →
-                              </button>
-                            </td>
-                          </tr>
-
-                          {isByeRow && (
-                            <tr className="cutoff-line-bye">
-                              <td colSpan={9}>
-                                👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS)
-                              </td>
-                            </tr>
-                          )}
-
-                          {isCutoffRow && (
-                            <tr className="cutoff-line-playoff">
-                              <td colSpan={9}>
-                                ▲ TOP 6 QUALIFY FOR PLAYOFFS &nbsp;|&nbsp; BUBBLE CUTOFF LINE ▼
-                              </td>
-                            </tr>
-                          )}
-                        </Fragment>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Mobile Adaptive Cards View (<= 820px) */}
-            <div className="mobile-cards-view">
-              {filteredTeams.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--muted)', font: '12px var(--mono)', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--line)' }}>
-                  No teams match your current filter.
-                </div>
-              ) : (
-                <div className="m-standings-card-list">
-                  {filteredTeams.map((team) => (
-                    <Fragment key={team.rosterId}>
-                      {renderMobileTeamCard(team, 'scenarios')}
-                      {team.seed === byeSpots && filter === 'ALL' && (
-                        <div className="m-cutoff-divider bye">
-                          <Crown size={13} />
-                          <span>👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS)</span>
-                        </div>
-                      )}
-                      {team.seed === playoffSpots && filter === 'ALL' && (
-                        <div className="m-cutoff-divider playoff">
-                          <Target size={13} />
-                          <span>▲ TOP 6 QUALIFY FOR PLAYOFFS | BUBBLE CUTOFF LINE ▼</span>
-                        </div>
-                      )}
-                    </Fragment>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -1811,7 +1486,7 @@ export function App() {
                 className="modal-close-btn"
                 onClick={() => setSelectedTeamRosterId(null)}
               >
-                ✕
+                Close
               </button>
             </div>
 
@@ -1828,12 +1503,12 @@ export function App() {
                 <p>{selectedTeamProfile.magicNumberExplanation}</p>
                 {selectedTeamProfile.fastestPlayoffClinchWeek && (
                   <div className="modal-highlight-box">
-                    ⚡ <strong>Earliest Playoff Clinch:</strong> Week {selectedTeamProfile.fastestPlayoffClinchWeek} (in {Math.max(1, selectedTeamProfile.fastestPlayoffClinchWeek - (clinchSummary?.currentWeek ?? 9))} week(s) with optimal results).
+                    <strong>Earliest Playoff Clinch:</strong> Week {selectedTeamProfile.fastestPlayoffClinchWeek} (in {Math.max(1, selectedTeamProfile.fastestPlayoffClinchWeek - (clinchSummary?.currentWeek ?? 9))} week(s) with optimal results).
                   </div>
                 )}
                 {selectedTeamProfile.fastestPlayoffElimWeek && (
                   <div className="modal-highlight-box elim">
-                    🚨 <strong>Earliest Playoff Elimination:</strong> Week {selectedTeamProfile.fastestPlayoffElimWeek} · Ceiling: {selectedTeamProfile.maxPossibleWins} Wins.
+                    <strong>Earliest Playoff Elimination:</strong> Week {selectedTeamProfile.fastestPlayoffElimWeek} · Ceiling: {selectedTeamProfile.maxPossibleWins} Wins.
                   </div>
                 )}
               </div>
@@ -1845,12 +1520,12 @@ export function App() {
                   <p>{selectedTeamProfile.byeExplanation}</p>
                   {selectedTeamProfile.fastestByeClinchWeek && (
                     <div className="modal-highlight-box bye">
-                      👑 <strong>Earliest Bye Lock:</strong> Week {selectedTeamProfile.fastestByeClinchWeek}.
+                      <strong>Earliest Bye Lock:</strong> Week {selectedTeamProfile.fastestByeClinchWeek}.
                     </div>
                   )}
                   {selectedTeamProfile.fastestByeElimWeek && (
                     <div className="modal-highlight-box elim">
-                      🚨 <strong>Earliest Bye Elimination:</strong> Week {selectedTeamProfile.fastestByeElimWeek}.
+                      <strong>Earliest Bye Elimination:</strong> Week {selectedTeamProfile.fastestByeElimWeek}.
                     </div>
                   )}
                 </div>

@@ -1359,41 +1359,37 @@ tbody tr:active td.sticky-col {
 
 .m-card-metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 5px;
-}
-@media (max-width: 360px) {
-  .m-card-metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  background: var(--surface-raised);
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line-subtle);
 }
 .m-metric-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
-  padding: 5px 6px;
-  background: var(--surface-raised);
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  text-align: center;
-  align-items: center;
+  padding: 2px 4px;
 }
 .m-metric-cell.highlight {
-  background: rgba(56, 189, 248, 0.08);
-  border-color: rgba(56, 189, 248, 0.25);
+  background: var(--accent-soft);
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--accent-border);
 }
 .m-metric-label {
-  font: 700 8.5px var(--mono);
+  font: 600 8.5px var(--mono);
   color: var(--muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .m-metric-val {
-  font: 700 12px var(--mono);
+  font: 600 12px var(--mono);
   color: var(--ink);
   white-space: nowrap;
   line-height: 1.25;
@@ -1402,7 +1398,7 @@ tbody tr:active td.sticky-col {
   color: var(--accent-text);
 }
 .m-metric-sub {
-  font: 500 9.5px var(--mono);
+  font: 9px var(--mono);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1440,19 +1436,22 @@ tbody tr:active td.sticky-col {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font: 700 10px var(--mono);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.06em;
   text-align: center;
 }
 .m-cutoff-divider.bye {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px dashed rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.06);
+  border-top: 1px solid rgba(245, 158, 11, 0.28);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.28);
   color: #fbbf24;
 }
 .m-cutoff-divider.playoff {
-  background: rgba(56, 189, 248, 0.12);
-  border: 1px dashed rgba(56, 189, 248, 0.4);
+  background: rgba(56, 189, 248, 0.06);
+  border-top: 1px solid rgba(56, 189, 248, 0.28);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.28);
   color: #7dd3fc;
 }
 
@@ -1851,15 +1850,15 @@ tbody tr:active td.sticky-col {
   .view-tabs {
     width: 100%;
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 4px;
   }
   .view-tabs button {
     justify-content: center;
-    padding: 7px 2px;
-    font-size: 10px;
-    flex-direction: column;
-    gap: 3px;
+    padding: 8px 6px;
+    font-size: 11px;
+    flex-direction: row;
+    gap: 5px;
   }
   .filter-chips-row {
     overflow-x: auto;
@@ -1957,10 +1956,6 @@ tbody tr:active td.sticky-col {
     padding: 0 8px;
     font-size: 11px;
     gap: 4px;
-  }
-  .m-card-metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
   }
   .sim-teams-row {
     flex-direction: column;
@@ -2170,25 +2165,25 @@ tbody tr:active td.sticky-col {
 
 /* CUTOFF DIVIDER ROWS */
 tr.cutoff-line-bye td {
-  height: 32px;
+  height: 26px;
   padding: 0 14px;
-  background: rgba(245, 158, 11, 0.08) !important;
-  border-top: 1px dashed rgba(245, 158, 11, 0.45);
-  border-bottom: 1px dashed rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.05) !important;
+  border-top: 1px solid rgba(245, 158, 11, 0.25);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.25);
   color: #fbbf24;
-  font: 700 10.5px var(--mono);
-  letter-spacing: 0.05em;
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.06em;
   text-align: center;
 }
 tr.cutoff-line-playoff td {
-  height: 32px;
+  height: 26px;
   padding: 0 14px;
-  background: rgba(56, 189, 248, 0.08) !important;
-  border-top: 1px dashed rgba(56, 189, 248, 0.45);
-  border-bottom: 1px dashed rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.05) !important;
+  border-top: 1px solid rgba(56, 189, 248, 0.25);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.25);
   color: #7dd3fc;
-  font: 700 10.5px var(--mono);
-  letter-spacing: 0.05em;
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.06em;
   text-align: center;
 }
 

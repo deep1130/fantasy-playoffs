@@ -559,20 +559,20 @@ export function analyzeLeagueClinch(
 
     if (hasClinchedBye) {
       status = 'CLINCHED_BYE'
-      statusLabel = 'Clinched Bye 👑'
+      statusLabel = 'Clinched Bye'
       clinchMeter = 100
     } else if (hasClinchedPlayoff) {
       status = 'CLINCHED_PLAYOFF'
-      statusLabel = 'Clinched Playoff 🔒'
+      statusLabel = 'Clinched Playoff'
       clinchMeter = 100
     } else if (isEliminatedFromPlayoffs) {
       status = 'ELIMINATED'
-      statusLabel = 'Eliminated ✕'
+      statusLabel = 'Eliminated'
       clinchMeter = 0
     } else if (seed <= byeSpots) {
       // Seed 1 or 2
       status = 'BYE_FAVORITE'
-      statusLabel = seed === 1 ? '1 Seed (In Control)' : '2 Seed (In Control)'
+      statusLabel = seed === 1 ? '1 Seed · Bye Track' : '2 Seed · Bye Track'
     } else if (seed <= playoffSpots) {
       // Seeds 3 to 6
       const gamesAhead = effectiveWins - (cutoffTeam?.effectiveWins ?? 0)
