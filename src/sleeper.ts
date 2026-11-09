@@ -46,11 +46,59 @@ export interface SleeperMatchup {
   roster_id: number
   matchup_id: number | null
   points: number
+  projected_points?: number
   custom_points?: number | null
   starters?: string[]
   starters_points?: number[]
   players?: string[]
   players_points?: Record<string, number>
+}
+
+interface SleeperProjectionItem {
+  player_id: string
+  team?: string | null
+  stats?: Record<string, number>
+}
+
+interface EspnScoreboard {
+  events?: Array<{
+    competitions?: Array<{
+      competitors?: Array<{ team?: { abbreviation?: string } }>
+      status?: { period?: number; displayClock?: string; type?: { state?: 'pre' | 'in' | 'post' } }
+    }>
+  }>
+}
+
+const ESPN_TO_SLEEPER_TEAM: Record<string, string> = {
+  WSH: 'WAS',
+  JAC: 'JAX',
+  LA: 'LAR',
+}
+
+function normalizeTeam(abbr?: string | null): string | undefined {
+  if (!abbr) return undefined
+  return ESPN_TO_SLEEPER_TEAM[abbr] ?? abbr
+}
+
+function parseClockSeconds(displayClock?: string): number {
+  if (!displayClock) return 900
+  const m = displayClock.trim().match(/^(\d+):(\d{2})$/)
+  if (m) return Number(m[1]) * 60 + Number(m[2])
+  return 900
+}
+
+function scoreStatLine(stats: Record<string, number> | undefined, scoring: Record<string, number>): number {
+  if (!stats) return 0
+  let total = 0
+  let matched = false
+  for (const [k, v] of Object.entries(stats)) {
+    if (typeof v === 'number' && Number.isFinite(v) && typeof scoring[k] === 'number') {
+      total += v * scoring[k]
+      matched = true
+    }
+  }
+  if (matched) return Math.max(0, total)
+  return Math.max(0, Number(stats.pts_ppr ?? stats.pts_half_ppr ?? stats.pts_std) || 0)
 }
 
 export interface NflState {
@@ -136,6 +184,98 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
   const weeks: Record<number, WeekMatchupFeed> = {}
   for (const feed of weekResults) {
     weeks[feed.week] = feed
+  }
+
+  // Enrich any in-progress regular season week with live projected final points
+  if (currentWeek > lastScoredWeek && weeks[currentWeek]?.matchups?.length) {
+    try {
+      const season = league.season
+      const scoring = league.scoring_settings || {}
+      const [projItems, weekStats, scoreboard] = await Promise.all([
+        getJson<SleeperProjectionItem[]>(
+          `https://api.sleeper.com/projections/nfl/${season}/${currentWeek}?season_type=regular`,
+        ).catch(() => []),
+        getJson<Record<string, Record<string, number>>>(
+          `${SLEEPER_API}/stats/nfl/regular/${season}/${currentWeek}?season_type=regular`,
+        ).catch(() => ({}) as Record<string, Record<string, number>>),
+        getJson<EspnScoreboard>(
+          `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${currentWeek}&year=${season}`,
+        ).catch(() => null),
+      ])
+
+      const teamProgress = new Map<string, { state: 'pre' | 'in' | 'post'; progress: number }>()
+      for (const ev of scoreboard?.events || []) {
+        const comp = ev.competitions?.[0]
+        if (!comp) continue
+        const state = comp.status?.type?.state || 'pre'
+        const period = Number(comp.status?.period) || 1
+        const clockSecs = parseClockSeconds(comp.status?.displayClock)
+        let progress = 0
+        if (state === 'post') {
+          progress = 1
+        } else if (state === 'in') {
+          const elapsedInPeriod = Math.max(0, Math.min(900, 900 - clockSecs))
+          const totalElapsed = Math.min(3600, (Math.min(4, period) - 1) * 900 + elapsedInPeriod)
+          progress = Math.max(0, Math.min(1, totalElapsed / 3600))
+        }
+        for (const c of comp.competitors || []) {
+          const abbr = normalizeTeam(c.team?.abbreviation)
+          if (abbr) teamProgress.set(abbr, { state, progress })
+        }
+      }
+
+      const projByPlayer = new Map<string, { team?: string; projPts: number }>()
+      for (const item of projItems) {
+        if (!item?.player_id) continue
+        projByPlayer.set(item.player_id, {
+          team: item.team || undefined,
+          projPts: scoreStatLine(item.stats, scoring),
+        })
+      }
+
+      for (const m of weeks[currentWeek].matchups) {
+        const actualTotal =
+          typeof m.custom_points === 'number' && Number.isFinite(m.custom_points)
+            ? m.custom_points
+            : Number(m.points) || 0
+        const starters = m.starters || []
+        let remainingProj = 0
+
+        for (let idx = 0; idx < starters.length; idx++) {
+          const pid = starters[idx]
+          if (!pid || pid === '0') continue
+          const projInfo = projByPlayer.get(pid)
+          const pregameProj = projInfo?.projPts ?? 0
+          if (pregameProj <= 0) continue
+
+          const st = weekStats[pid]
+          const hasPlayed =
+            st != null &&
+            ((st.gp ?? 0) > 0 ||
+              (st.gms_active ?? 0) > 0 ||
+              (st.tm_off_snp ?? 0) > 0 ||
+              (st.tm_def_snp ?? 0) > 0 ||
+              (st.tm_st_snp ?? 0) > 0)
+          const starterActual =
+            m.players_points?.[pid] ?? m.starters_points?.[idx] ?? 0
+          const gameInfo = projInfo?.team ? teamProgress.get(projInfo.team) : undefined
+
+          if (gameInfo?.state === 'post') {
+            continue
+          } else if (gameInfo?.state === 'in') {
+            remainingProj += pregameProj * (1 - gameInfo.progress)
+          } else if (gameInfo?.state === 'pre') {
+            remainingProj += pregameProj
+          } else if (!hasPlayed && starterActual === 0) {
+            remainingProj += pregameProj
+          }
+        }
+
+        m.projected_points = Math.round((actualTotal + remainingProj) * 100) / 100
+      }
+    } catch {
+      // Fallback to raw points if live projection fetch fails
+    }
   }
 
   return {

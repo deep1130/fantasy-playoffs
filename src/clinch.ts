@@ -278,9 +278,18 @@ export function analyzeLeagueClinch(
       const matchup = matchups.find((m) => m.roster_id === roster.roster_id)
       let pts = 0
       if (matchup) {
-        pts = typeof matchup.custom_points === 'number' && Number.isFinite(matchup.custom_points)
-          ? matchup.custom_points
-          : Number(matchup.points) || 0
+        if (
+          week > data.lastScoredWeek &&
+          typeof matchup.projected_points === 'number' &&
+          Number.isFinite(matchup.projected_points)
+        ) {
+          pts = matchup.projected_points
+        } else {
+          pts =
+            typeof matchup.custom_points === 'number' && Number.isFinite(matchup.custom_points)
+              ? matchup.custom_points
+              : Number(matchup.points) || 0
+        }
       }
       weekScores.push({ rosterId: roster.roster_id, points: pts, matchupId: matchup?.matchup_id ?? null })
     }
