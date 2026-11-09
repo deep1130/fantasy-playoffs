@@ -389,6 +389,21 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
     }
   }
 
+  const allWeeksMap: Record<number, WeekFeed> = Object.fromEntries(weekEntries)
+  for (const [week, matchups] of historicEntries) {
+    if (!allWeeksMap[week]) {
+      allWeeksMap[week] = {
+        matchups,
+        projections: {},
+        byes: [],
+        gameStates: {},
+        gameProgress: {},
+      }
+    } else {
+      allWeeksMap[week].matchups = matchups
+    }
+  }
+
   return {
     league,
     rosters,
@@ -398,7 +413,7 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
     winnersBracket,
     currentWeek,
     lastScoredWeek,
-    weeks: Object.fromEntries(weekEntries),
+    weeks: allWeeksMap,
     historicalScores,
     historicalMaxPf,
     historicalTeamScores,
