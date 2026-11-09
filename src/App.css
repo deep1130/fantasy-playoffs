@@ -1249,16 +1249,16 @@ tbody tr:active td.sticky-col {
 .m-standings-card-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .m-standings-card {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 12px;
+  padding: 9px 11px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
 }
 .m-card-header {
   display: flex;
@@ -1273,53 +1273,94 @@ tbody tr:active td.sticky-col {
   min-width: 0;
 }
 .m-card-rank {
-  font: 700 12px var(--mono);
+  font: 700 11.5px var(--mono);
   color: var(--muted);
-  min-width: 22px;
+  min-width: 20px;
 }
+
+/* RECORD SPLITS STRIP (HEAD TO HEAD & MEDIAN) */
+.m-card-records-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.m-record-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line-subtle);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.m-chip-lbl {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.m-chip-val {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+.m-record-chip.m-chip-total {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--line);
+}
+.m-record-chip.m-chip-total .m-chip-val {
+  color: var(--accent-text);
+}
+
 .m-card-metrics-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  gap: 4px;
   background: var(--surface-raised);
-  padding: 8px;
+  padding: 6px 8px;
   border-radius: 6px;
   border: 1px solid var(--line-subtle);
 }
 .m-metric-cell {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
+  padding: 2px 4px;
 }
 .m-metric-cell.highlight {
   background: var(--accent-soft);
-  padding: 4px 6px;
+  padding: 3px 5px;
   border-radius: 4px;
   border: 1px solid var(--accent-border);
 }
 .m-metric-label {
   font: 600 8.5px var(--mono);
   color: var(--muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .m-metric-val {
-  font: 600 12.5px var(--mono);
+  font: 600 12px var(--mono);
   color: var(--ink);
   white-space: nowrap;
+  line-height: 1.25;
 }
 .m-metric-val.accent {
   color: var(--accent-text);
 }
 .m-metric-sub {
-  font: 9.5px var(--mono);
+  font: 9px var(--mono);
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
 /* MOBILE WEEKLY LEADERBOARD CARDS */
@@ -1546,11 +1587,12 @@ tbody tr:active td.sticky-col {
   white-space: nowrap;
 }
 .m-summary-chip strong {
-  font: 600 12px var(--display);
+  font: 600 11.5px var(--display);
   color: var(--ink);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
 }
 .chip-sub {
   font: 9.5px var(--mono);
@@ -1581,22 +1623,27 @@ tbody tr:active td.sticky-col {
 .m-sim-card-left {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
+  flex: 1;
 }
 .m-sim-title {
-  font: 600 12.5px var(--display);
+  font: 600 13px var(--display);
   color: var(--ink);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
+}
+.m-sim-title strong {
+  color: var(--accent-text);
+  font-weight: 700;
 }
 .m-sim-desc {
   font: 10px var(--mono);
   color: var(--muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.3;
 }
 .m-sim-card-right {
   display: flex;
@@ -1774,336 +1821,262 @@ tbody tr:active td.sticky-col {
   }
 }
 
-/* --------------------------------------------------------------------------
-   Fantasy Playoffs — Clinch, Bye & Cutoff Styles
-   -------------------------------------------------------------------------- */
+/* ==========================================================================
+   FANTASY PLAYOFFS — POSTSEASON, BYE & WHAT-IF MACHINE STYLES
+   ========================================================================== */
 
-/* Status Badges */
+/* RANK PICK NUMBERS */
+.pick-number {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font: 700 11px var(--mono);
+}
+.pick-number.bye-number {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+.pick-number.lottery-number {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+/* POSTSEASON STATUS PILLS */
 .status-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 8px;
-  border-radius: 999px;
-  font: 600 10px var(--mono);
-  letter-spacing: 0.02em;
+  padding: 4px 9px;
+  border-radius: 6px;
+  font: 600 11px var(--mono);
   white-space: nowrap;
 }
-.status-clinched-bye {
-  color: #e9d5ff;
-  background: rgba(168, 85, 247, 0.15);
-  border: 1px solid rgba(168, 85, 247, 0.35);
-  box-shadow: 0 0 12px rgba(168, 85, 247, 0.18);
-}
-.status-clinched-playoff {
-  color: #a7f3d0;
-  background: rgba(16, 185, 129, 0.15);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
-}
-.status-in-the-hunt {
-  color: #bae6fd;
-  background: rgba(14, 165, 233, 0.15);
-  border: 1px solid rgba(14, 165, 233, 0.35);
-}
-.status-on-the-bubble {
-  color: #fde68a;
-  background: rgba(245, 158, 11, 0.15);
+.status-pill.status-clinched-bye {
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.14);
   border: 1px solid rgba(245, 158, 11, 0.35);
 }
-.status-work-to-do {
-  color: #fed7aa;
-  background: rgba(249, 115, 22, 0.12);
-  border: 1px solid rgba(249, 115, 22, 0.28);
-}
-.status-eliminated {
-  color: #94a3b8;
-  background: rgba(100, 116, 139, 0.12);
-  border: 1px solid rgba(100, 116, 139, 0.25);
-  opacity: 0.85;
-}
-
-/* Clinch Meter */
-.meter-cell {
-  min-width: 120px;
-}
-.meter-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.meter-track {
-  position: relative;
-  flex: 1;
-  height: 7px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.meter-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.3s ease;
-}
-.meter-fill-clinched {
-  background: linear-gradient(90deg, #10b981, #34d399);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.4);
-}
-.meter-fill-high {
-  background: linear-gradient(90deg, #0ea5e9, #38bdf8);
-}
-.meter-fill-mid {
-  background: linear-gradient(90deg, #f59e0b, #fbbf24);
-}
-.meter-fill-low {
-  background: linear-gradient(90deg, #f97316, #fb923c);
-}
-.meter-fill-elim {
-  background: #64748b;
-}
-.meter-val {
-  font: 600 11px var(--mono);
-  color: var(--ink);
-  min-width: 34px;
-  text-align: right;
-}
-
-/* Magic & Elimination Numbers */
-.magic-pill {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border-radius: 5px;
-  font: 700 11px var(--mono);
-  letter-spacing: 0.02em;
-}
-.magic-lock {
+.status-pill.status-clinched-playoff {
   color: #34d399;
   background: rgba(16, 185, 129, 0.14);
-  border: 1px solid rgba(16, 185, 129, 0.3);
+  border: 1px solid rgba(16, 185, 129, 0.32);
 }
-.magic-active {
+.status-pill.status-in-control {
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.12);
   border: 1px solid rgba(56, 189, 248, 0.28);
-}
-.magic-bye {
-  color: #c084fc;
-  background: rgba(192, 132, 252, 0.12);
-  border: 1px solid rgba(192, 132, 252, 0.3);
-}
-.magic-far {
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--line);
-}
-.elim-out {
-  color: #f87171;
-  background: rgba(239, 68, 68, 0.14);
-  border: 1px solid rgba(239, 68, 68, 0.3);
-}
-.elim-danger {
-  color: #fb923c;
-  background: rgba(249, 115, 22, 0.14);
-  border: 1px solid rgba(249, 115, 22, 0.3);
-}
-
-.record-sub {
-  display: block;
-  margin-top: 3px;
-  color: var(--muted);
-  font: 9px var(--mono);
-  letter-spacing: 0.01em;
-}
-
-/* Cutoff divider rows */
-.cutoff-line-bye td {
-  height: 28px;
-  padding: 0 12px;
-  background: rgba(168, 85, 247, 0.08);
-  border-top: 1px dashed rgba(168, 85, 247, 0.45);
-  border-bottom: 1px dashed rgba(168, 85, 247, 0.45);
-  color: #d8b4fe;
-  font: 600 10px var(--mono);
-  letter-spacing: 0.05em;
-  text-align: center;
-}
-.cutoff-line-playoff td {
-  height: 28px;
-  padding: 0 12px;
-  background: rgba(56, 189, 248, 0.08);
-  border-top: 1px dashed rgba(56, 189, 248, 0.45);
-  border-bottom: 1px dashed rgba(56, 189, 248, 0.45);
-  color: #7dd3fc;
-  font: 600 10px var(--mono);
-  letter-spacing: 0.05em;
-  text-align: center;
-}
-
-/* Clickable rows & drawers */
-.clickable-row {
-  cursor: pointer;
-  transition: background .15s ease;
-}
-.clickable-row:hover td {
-  background: rgba(255, 255, 255, 0.035);
-}
-.expand-toggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: var(--muted);
-  transition: transform .2s ease, color .15s ease;
-}
-.clickable-row:hover .expand-toggle {
-  color: var(--ink);
-}
-.expand-toggle.open {
-  transform: rotate(90deg);
-  color: #38bdf8;
-}
-
-.drawer-row td {
-  padding: 0;
-  background: rgba(0, 0, 0, 0.28);
-  border-bottom: 1px solid var(--line);
-}
-.drawer-content {
-  padding: 18px 24px 22px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
-}
-.drawer-card {
-  padding: 14px 16px;
-  border-radius: 6px;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-}
-.drawer-card h4 {
-  margin: 0 0 10px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font: 600 12px var(--display);
-  color: var(--ink);
-}
-.drawer-scenarios {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-.drawer-scenarios li {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 11.5px;
-  line-height: 1.4;
-  color: var(--ink-secondary);
-}
-.drawer-scenarios li svg {
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-.drawer-scenarios li.clinch-scenario svg {
-  color: #34d399;
-}
-.drawer-scenarios li.bye-scenario svg {
-  color: #c084fc;
-}
-.drawer-scenarios li.elim-scenario svg {
-  color: #f87171;
-}
-
-/* Filter bar */
-.filter-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-right: auto;
-}
-.filter-tab {
-  padding: 5px 11px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--muted);
-  font: 500 10px var(--mono);
-  cursor: pointer;
-  transition: all .15s ease;
-}
-.filter-tab:hover {
-  color: var(--ink);
-  background: var(--surface-raised);
-}
-.filter-tab.selected {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.35);
-  font-weight: 600;
-}
-
-/* Empty prompt */
-.empty-league-prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 16px;
-  text-align: center;
-}
-.empty-league-prompt p {
-  margin: 0;
-}
-.demo-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  background: rgba(56, 189, 248, 0.12);
-  color: #38bdf8;
-  font: 600 11px var(--mono);
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-.demo-button:hover {
-  background: rgba(56, 189, 248, 0.2);
-  color: #7dd3fc;
-}
-
-/* ==========================================================================
-   ENHANCED PLAYOFF CLINCH, WHAT-IF MACHINE & SCENARIOS STYLES
-   ========================================================================== */
-
-/* STATUS PILLS */
-.status-pill.status-in-control {
-  color: #2dd4bf;
-  background: rgba(45, 212, 191, 0.12);
-  border: 1px solid rgba(45, 212, 191, 0.28);
 }
 .status-pill.status-in-the-hunt {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.12);
-  border: 1px solid rgba(56, 189, 248, 0.28);
+  color: #7dd3fc;
+  background: rgba(125, 211, 252, 0.08);
+  border: 1px solid rgba(125, 211, 252, 0.22);
 }
 .status-pill.status-on-the-bubble {
   color: #fbbf24;
   background: rgba(251, 191, 36, 0.12);
-  border: 1px solid rgba(251, 191, 36, 0.28);
+  border: 1px solid rgba(251, 191, 36, 0.3);
 }
 .status-pill.status-work-to-do {
   color: #f87171;
   background: rgba(239, 68, 68, 0.10);
   border: 1px solid rgba(239, 68, 68, 0.25);
+}
+.status-pill.status-eliminated {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+}
+
+/* MAGIC & ELIMINATION BADGES */
+.magic-cell, .elim-cell {
+  font-family: var(--mono);
+}
+.magic-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font: 600 11px var(--mono);
+}
+.magic-badge.active {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.magic-badge.locked {
+  color: #34d399;
+  background: rgba(16, 185, 129, 0.14);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+.magic-badge.elim {
+  color: var(--muted);
+}
+.elim-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  font: 600 11px var(--mono);
+}
+.elim-badge.active {
+  color: var(--ink-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+}
+.elim-badge.out {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* PLAYOFF ODDS PROGRESS BAR */
+.odds-cell {
+  min-width: 110px;
+}
+.odds-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.odds-val {
+  min-width: 36px;
+  font: 600 11px var(--mono);
+  color: var(--ink);
+}
+.odds-track {
+  flex: 1;
+  height: 5px;
+  background: var(--surface-raised);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--line-subtle);
+}
+.odds-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.odds-fill.high {
+  background: #34d399;
+}
+.odds-fill.mid {
+  background: #38bdf8;
+}
+.odds-fill.low {
+  background: #f87171;
+}
+
+/* ACTION BUTTON IN TABLE */
+.scenario-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  color: var(--ink-secondary);
+  font: 500 11px var(--mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.scenario-btn:hover {
+  color: var(--ink);
+  background: var(--control);
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+/* CUTOFF DIVIDER ROWS */
+tr.cutoff-line-bye td {
+  height: 32px;
+  padding: 0 14px;
+  background: rgba(245, 158, 11, 0.08) !important;
+  border-top: 1px dashed rgba(245, 158, 11, 0.45);
+  border-bottom: 1px dashed rgba(245, 158, 11, 0.45);
+  color: #fbbf24;
+  font: 700 10.5px var(--mono);
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+tr.cutoff-line-playoff td {
+  height: 32px;
+  padding: 0 14px;
+  background: rgba(56, 189, 248, 0.08) !important;
+  border-top: 1px dashed rgba(56, 189, 248, 0.45);
+  border-bottom: 1px dashed rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  font: 700 10.5px var(--mono);
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+/* FILTER CHIPS */
+.filter-chips-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0 16px;
+  flex-wrap: wrap;
+}
+.filter-label {
+  color: var(--muted);
+  font: 600 10px var(--mono);
+  letter-spacing: 0.04em;
+  margin-right: 4px;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font: 500 11px var(--mono);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.filter-chip:hover {
+  color: var(--ink);
+  background: var(--surface-raised);
+}
+.filter-chip.active {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.38);
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+/* INTRO BOX FOR SUB-VIEWS */
+.view-intro-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-bottom: 16px;
+}
+.view-intro-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
 }
 
 /* WHAT-IF PLAYOFF MACHINE */
@@ -2175,7 +2148,6 @@ tbody tr:active td.sticky-col {
   cursor: not-allowed;
 }
 
-/* SIM WEEK TABS */
 .sim-week-tabs {
   display: flex;
   align-items: center;
@@ -2222,7 +2194,6 @@ tbody tr:active td.sticky-col {
   font-weight: 700;
 }
 
-/* MATCHUPS GRID */
 .sim-matchups-section {
   display: flex;
   flex-direction: column;
@@ -2370,7 +2341,6 @@ tbody tr:active td.sticky-col {
   color: #7dd3fc;
 }
 
-/* DELTA PILL */
 .delta-pill {
   display: inline-block;
   padding: 2px 6px;
@@ -2593,7 +2563,6 @@ tbody tr:active td.sticky-col {
   line-height: 1.45;
 }
 
-/* NO MATCHUPS */
 .no-matchups-box {
   padding: 24px;
   text-align: center;

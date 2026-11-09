@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   Clock3,
@@ -14,8 +15,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   Target,
-  ToggleLeft,
-  ToggleRight,
   Trophy,
   Zap,
 } from 'lucide-react'
@@ -56,13 +55,24 @@ function getInitialLeagueId(): string {
   return ''
 }
 
+function getInitialTab(): MainTab {
+  if (typeof window !== 'undefined') {
+    const fromQuery = new URLSearchParams(window.location.search).get('tab')
+    if (fromQuery && ['clinch', 'bye', 'whatif', 'scenarios'].includes(fromQuery)) {
+      return fromQuery as MainTab
+    }
+  }
+  return 'clinch'
+}
+
 export function App() {
   const initialId = useMemo(getInitialLeagueId, [])
+  const initialTab = useMemo(getInitialTab, [])
   const [leagueId, setLeagueId] = useState(initialId)
   const [data, setData] = useState<LeagueData | null>(null)
   const [busy, setBusy] = useState(Boolean(initialId))
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<MainTab>('clinch')
+  const [tab, setTab] = useState<MainTab>(initialTab)
   const [filter, setFilter] = useState<FilterOption>('ALL')
   const [search, setSearch] = useState('')
   const [lastUpdated, setLastUpdated] = useState<number | null>(null)
@@ -621,27 +631,28 @@ export function App() {
         </div>
       </section>
 
-      {/* Median Scoring Banner & Toggle */}
+      {/* Median Scoring Banner & Toggle (using exact .live-week-banner style from fantasy-expected-wins) */}
       {clinchSummary && (
-        <div className="median-bar">
-          <div className="median-info">
-            <span className="median-badge">
-              <Zap size={12} /> LEAGUE MEDIAN SCORING (2 WINS PER WEEK)
-            </span>
-            <span className="median-desc">
-              {hasMedian
-                ? 'Active: Factoring in 2 games each week (1 Head-to-Head + 1 against Weekly Scoring Median). Standings, magic numbers, and odds reflect 2W/wk.'
-                : 'Disabled: Factoring in standard 1 game per week (Head-to-Head only).'}
-            </span>
+        <div className="live-week-banner">
+          <div className="live-week-info">
+            <span className="live-dot" />
+            <div className="live-week-text">
+              <strong>League Median Scoring (2 Wins Per Week)</strong>
+              <span>
+                {hasMedian
+                  ? 'Active: Factoring in 2 games each week (1 Head-to-Head + 1 against Weekly Scoring Median). Standings, magic numbers, and odds reflect 2W/wk.'
+                  : 'Disabled: Factoring in standard 1 game per week (Head-to-Head only).'}
+              </span>
+            </div>
           </div>
           <button
             type="button"
-            className={`median-toggle-btn ${hasMedian ? 'active' : ''}`}
+            className={`live-toggle-button ${hasMedian ? 'active' : ''}`}
             onClick={() => setEnableMedianOverride(!hasMedian)}
             title="Toggle between full 2W/week median scoring and pure 1W/week H2H"
           >
-            {hasMedian ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
-            <span>{hasMedian ? 'MEDIAN FACTORED IN (ON)' : 'HEAD-TO-HEAD ONLY (OFF)'}</span>
+            <Zap size={13} />
+            <span>{hasMedian ? 'Median Factored In (2W/Wk)' : 'Head-to-Head Only (1W/Wk)'}</span>
           </button>
         </div>
       )}
@@ -661,27 +672,25 @@ export function App() {
             </h2>
           </div>
 
-          <div className="board-controls">
-            {/* Search Input */}
-            <div className="table-search-box">
-              <Search size={13} className="search-icon" />
+          <div className="board-tools">
+            <div className="search-box">
+              <Search size={14} />
               <input
                 type="text"
-                placeholder="Find team or owner"
+                placeholder="Filter teams…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
-            {/* View Tabs */}
-            <div className="view-pills">
+            <div className="view-tabs" role="tablist">
               <button
                 type="button"
                 className={tab === 'clinch' ? 'selected' : ''}
                 onClick={() => setTab('clinch')}
               >
                 <Trophy size={12} />
-                <span>CLINCH RADAR</span>
+                <span>Standings</span>
               </button>
               <button
                 type="button"
@@ -689,7 +698,7 @@ export function App() {
                 onClick={() => setTab('bye')}
               >
                 <Crown size={12} />
-                <span>BYE RACE (TOP 2)</span>
+                <span>Bye Race</span>
               </button>
               <button
                 type="button"
@@ -697,7 +706,7 @@ export function App() {
                 onClick={() => setTab('whatif')}
               >
                 <Flame size={12} />
-                <span>WHAT-IF MACHINE</span>
+                <span>What-If</span>
               </button>
               <button
                 type="button"
@@ -705,7 +714,7 @@ export function App() {
                 onClick={() => setTab('scenarios')}
               >
                 <Target size={12} />
-                <span>SCENARIOS</span>
+                <span>Scenarios</span>
               </button>
             </div>
           </div>
@@ -778,7 +787,24 @@ export function App() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTeams.map((team) => {
+                {busy && (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--muted)' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', font: '600 12px var(--mono)' }}>
+                        <RefreshCw size={14} className="spin" />
+                        <span>Loading Sleeper league playoff data...</span>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {!busy && filteredTeams.length === 0 && (
+                  <tr>
+                    <td colSpan={9} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--muted)', font: '12px var(--mono)' }}>
+                      {clinchSummary ? 'No teams match your current filter.' : 'Enter a Sleeper League ID above to decode playoff clinches.'}
+                    </td>
+                  </tr>
+                )}
+                {!busy && filteredTeams.map((team) => {
                   const isByeRow = team.seed <= byeSpots
                   const isPlayoffRow = team.seed <= playoffSpots
                   const showByeDivider = team.seed === byeSpots && filter === 'ALL'
@@ -906,21 +932,17 @@ export function App() {
                       </tr>
 
                       {showByeDivider && (
-                        <tr className="cutoff-divider-row">
+                        <tr className="cutoff-line-bye">
                           <td colSpan={9}>
-                            <div className="cutoff-line-bye">
-                              👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS)
-                            </div>
+                            👑 TOP 2 CLINCH FIRST-ROUND PLAYOFF BYE (ADVANCE TO SEMIFINALS)
                           </td>
                         </tr>
                       )}
 
                       {showPlayoffDivider && (
-                        <tr className="cutoff-divider-row">
+                        <tr className="cutoff-line-playoff">
                           <td colSpan={9}>
-                            <div className="cutoff-line-playoff">
-                              ▲ TOP 6 QUALIFY FOR PLAYOFFS  |  BUBBLE CUTOFF LINE ▼
-                            </div>
+                            ▲ TOP 6 QUALIFY FOR PLAYOFFS  |  BUBBLE CUTOFF LINE ▼
                           </td>
                         </tr>
                       )}
@@ -1098,11 +1120,9 @@ export function App() {
                         </tr>
 
                         {showByeDivider && (
-                          <tr className="cutoff-divider-row">
+                          <tr className="cutoff-line-bye">
                             <td colSpan={10}>
-                              <div className="cutoff-line-bye">
-                                👑 TOP 2 EARN FIRST-ROUND PLAYOFF BYE (SEEDS 1 &amp; 2)
-                              </div>
+                              👑 TOP 2 EARN FIRST-ROUND PLAYOFF BYE (SEEDS 1 &amp; 2)
                             </td>
                           </tr>
                         )}
@@ -1395,21 +1415,17 @@ export function App() {
                           </tr>
 
                           {showByeDivider && (
-                            <tr className="cutoff-divider-row">
+                            <tr className="cutoff-line-bye">
                               <td colSpan={6}>
-                                <div className="cutoff-line-bye">
-                                  👑 TOP 2 FIRST-ROUND PLAYOFF BYE CUTOFF
-                                </div>
+                                👑 TOP 2 FIRST-ROUND PLAYOFF BYE CUTOFF
                               </td>
                             </tr>
                           )}
 
                           {showPlayoffDivider && (
-                            <tr className="cutoff-divider-row">
+                            <tr className="cutoff-line-playoff">
                               <td colSpan={6}>
-                                <div className="cutoff-line-playoff">
-                                  ▲ TOP 6 PLAYOFF QUALIFIED | BUBBLE CUTOFF ▼
-                                </div>
+                                ▲ TOP 6 PLAYOFF QUALIFIED | BUBBLE CUTOFF ▼
                               </td>
                             </tr>
                           )}
@@ -1623,40 +1639,77 @@ export function App() {
         </div>
       )}
 
-      {/* Guide Section at bottom */}
-      <section className="analytics-guide">
-        <p className="eyebrow">ANALYTICS GUIDE</p>
-        <h3>How Playoff Clinch Math, First-Round Byes, &amp; League Median Work</h3>
-
-        <div className="guide-grid">
-          <div className="guide-card">
-            <span className="guide-label">FIRST-ROUND BYE</span>
-            <h4>Top 2 Seeds Earn a Bye</h4>
-            <p>
-              In 6-team playoff brackets, Seeds 1 and 2 skip the quarterfinal round and advance straight to the semifinals.
-              The Bye Magic Number measures the exact combination of your wins and Seed 3 losses required to lock a top-2 finish.
-            </p>
+      {/* HOW IT WORKS / METHODOLOGY SECTION (Exact layout from fantasy-expected-wins) */}
+      <details className="model-details" open>
+        <summary>
+          <span className="method-icon"><Trophy size={18} /></span>
+          <div className="model-heading">
+            <span className="model-tag">HOW IT WORKS</span>
+            <strong>How Playoff Clinch Math, First-Round Byes, &amp; League Median Work</strong>
           </div>
+          <ChevronDown className="model-chevron" size={17} />
+        </summary>
 
-          <div className="guide-card">
-            <span className="guide-label">MAGIC NUMBER (M)</span>
-            <h4>Clinching Mathematical Locks</h4>
-            <p>
-              A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #7) to catch them.
-              When Magic Number reaches 0, you are officially locked!
-            </p>
-          </div>
+        <div className="model-content">
+          <div className="model-cards-grid">
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">FIRST-ROUND BYE</span>
+                <h4>1. Top 2 Seeds Earn a Bye</h4>
+              </div>
+              <p>
+                In 6-team playoff brackets, Seeds 1 and 2 skip the quarterfinal round and advance straight to the semifinals.
+              </p>
+              <p>
+                The <strong>Bye Magic Number</strong> measures the exact combination of your wins and Seed 3 losses required to lock a top-2 finish.
+              </p>
+            </div>
 
-          <div className="guide-card">
-            <span className="guide-label">LEAGUE MEDIAN</span>
-            <h4>Two Games Every Week</h4>
-            <p>
-              In leagues using median scoring, each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league.
-              This doubles the total regular-season games and accelerates clinching and elimination races.
-            </p>
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">MAGIC NUMBER (M)</span>
+                <h4>2. Clinching Mathematical Locks</h4>
+              </div>
+              <p>
+                A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #7) to catch them.
+              </p>
+              <p>
+                When Magic Number reaches <code>0</code>, you are officially locked!
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">LEAGUE MEDIAN</span>
+                <h4>3. Two Games Every Week</h4>
+              </div>
+              <p>
+                In leagues using median scoring, each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league.
+              </p>
+              <p>
+                This doubles the total regular-season games and accelerates clinching and elimination races.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">TIEBREAKERS</span>
+                <h4>4. Points For Primary Tiebreaker</h4>
+              </div>
+              <p>
+                In Sleeper leagues, standings ties between identical win-loss records are decided by total <strong>Starter Points For (PF)</strong>.
+              </p>
+              <p>
+                Holding a high PF margin acts as an effective extra half-game buffer against bubble challengers.
+              </p>
+            </div>
           </div>
         </div>
-      </section>
+      </details>
+
+      <div className="bottom-note">
+        UNOFFICIAL DYNASTY &amp; REDRAFT TOOL <span>·</span> LIVE SCORES &amp; ROSTERS POWERED BY SLEEPER API
+      </div>
     </main>
   )
 }
