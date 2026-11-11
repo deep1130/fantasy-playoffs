@@ -1581,13 +1581,13 @@ export function App() {
         </div>
       )}
 
-      {/* HOW IT WORKS / METHODOLOGY SECTION (Exact layout from fantasy-expected-wins) */}
+      {/* HOW IT WORKS / METHODOLOGY SECTION */}
       <details className="model-details" open>
         <summary>
           <span className="method-icon"><Trophy size={18} /></span>
           <div className="model-heading">
-            <span className="model-tag">HOW IT WORKS</span>
-            <strong>How Playoff Clinch Math, First-Round Byes, &amp; League Median Work</strong>
+            <span className="model-tag">COMPLETE GUIDE &amp; METHODOLOGY</span>
+            <strong>How Playoff Magic Numbers, Elimination Math, Live Projections &amp; What-If Simulation Work</strong>
           </div>
           <ChevronDown className="model-chevron" size={17} />
         </summary>
@@ -1596,53 +1596,105 @@ export function App() {
           <div className="model-cards-grid">
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">FIRST-ROUND BYE</span>
-                <h4>1. Top 2 Seeds Earn a Bye</h4>
+                <span className="model-card-tag">MAGIC NUMBER (MAGIC #)</span>
+                <h4>1. Playoff Clinch Math &amp; Earliest Lock Week</h4>
               </div>
               <p>
-                In 6-team playoff brackets, Seeds 1 and 2 skip the quarterfinal round and advance straight to the semifinals.
+                A team's <strong>Playoff Magic Number (Magic #)</strong> is the combined number of your own wins plus losses by the first team outside the playoffs (<strong>Seed #7</strong>) needed to mathematically guarantee a Top-6 berth: <code>(Seed #7 Max Possible Wins + 1) − Your Current Wins</code>.
               </p>
               <p>
-                The <strong>Bye Magic Number</strong> measures the exact combination of your wins and Seed 3 losses required to lock a top-2 finish.
+                <strong>Earliest Lock (Wk X)</strong> shows the soonest NFL week you can mathematically clinch if you win out and bubble chasers lose out. When your Magic # hits <code>0</code>, your spot is locked.
               </p>
             </div>
 
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">MAGIC NUMBER (M)</span>
-                <h4>2. Clinching Mathematical Locks</h4>
+                <span className="model-card-tag">ELIMINATION NUMBER (ELIM #)</span>
+                <h4>2. Elimination Math &amp; Earliest Elimination Week</h4>
               </div>
               <p>
-                A team clinches a playoff spot when it is mathematically impossible for the first team outside the cutoff (Seed #7) to catch them.
+                For teams chasing the cutoff (Seeds #7+), <strong>Elim #</strong> tracks the combined number of your losses plus wins by the last playoff seed (<strong>Seed #6</strong>) that will mathematically eliminate you from postseason contention.
               </p>
               <p>
-                When Magic Number reaches <code>0</code>, you are officially locked!
+                <strong>Earliest Elim (Wk X)</strong> shows the first week a team could be mathematically knocked out if they go <code>0-2</code> (or <code>0-1</code>) while the #6 seed wins out. Once a team's Win Ceiling falls below Seed #6's current wins, they are marked <strong>Eliminated</strong>.
               </p>
             </div>
 
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">LEAGUE MEDIAN</span>
-                <h4>3. Two Games Every Week</h4>
+                <span className="model-card-tag">FIRST-ROUND BYE (TOP 2)</span>
+                <h4>3. Bye Race Magic # &amp; Bye Elimination</h4>
               </div>
               <p>
-                In leagues using median scoring, each week offers 2 wins: 1 from your Head-to-Head matchup and 1 from scoring in the top 50% of the league.
+                In 6-team brackets, <strong>Seeds #1 and #2</strong> skip the Wild Card round and advance directly to the semifinals.
               </p>
               <p>
-                This doubles the total regular-season games and accelerates clinching and elimination races.
+                The <strong>Bye Race</strong> column calculates a separate Magic # against <strong>Seed #3</strong> (first team out of a bye) and tracks when chasing teams are mathematically eliminated from earning a Top-2 seed (<code>Out of Top 2</code>).
               </p>
             </div>
 
             <div className="model-card">
               <div className="model-card-header">
-                <span className="model-card-tag">TIEBREAKERS</span>
-                <h4>4. Points For Primary Tiebreaker</h4>
+                <span className="model-card-tag">LEAGUE MEDIAN (2W / WK)</span>
+                <h4>4. Auto-Detected Weekly Scoring Median</h4>
               </div>
               <p>
-                In Sleeper leagues, standings ties between identical win-loss records are decided by total <strong>Starter Points For (PF)</strong>.
+                If your Sleeper league has <strong>League Median Scoring</strong> enabled, the app automatically factors in <strong>2 games per week</strong>: 1 Head-to-Head matchup and 1 game against the weekly league median score (average of the #6 and #7 scores in a 12-team league).
               </p>
               <p>
-                Holding a high PF margin acts as an effective extra half-game buffer against bubble challengers.
+                Each week can produce a <code>2-0</code>, <code>1-1</code>, or <code>0-2</code> result—meaning a single week can swing a Magic # or Elim # by up to <strong>4 games</strong> when paired with a bubble rival's result.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">LIVE IN-PROGRESS WEEK</span>
+                <h4>5. Live Week Projections (H2H &amp; Median)</h4>
+              </div>
+              <p>
+                When an NFL week is currently in progress, toggling <strong>Include Live Week Scores</strong> projects the week's final H2H and League Median outcomes rather than using raw incomplete point totals.
+              </p>
+              <p>
+                For every starter, finished games use official points, in-progress games blend actual points with remaining Sleeper projections scaled by live game-clock progress, and upcoming games (e.g., <em>Monday Night Football</em>) add full pregame projections so top-half median winners are accurately projected.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">WIN RANGE &amp; ODDS</span>
+                <h4>6. Floor – Ceiling Range, Odds &amp; Tiebreakers</h4>
+              </div>
+              <p>
+                <strong>Win Range</strong> displays your mathematical floor (current wins if you lose out) and ceiling (<code>Max Possible Wins</code> if you win every remaining H2H and Median game).
+              </p>
+              <p>
+                <strong>Postseason Odds</strong> estimate Playoff and Bye probability using current win cushions, remaining schedule, and <strong>Points For (PF)</strong>—which serves as Sleeper's primary standings tiebreaker when teams finish with identical records.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">TEAM SCENARIO DRAWER</span>
+                <h4>7. Click Any Team for Clinch Paths &amp; Matrix</h4>
+              </div>
+              <p>
+                Clicking or tapping any team row or mobile card opens their <strong>Clinch &amp; Elimination Intelligence Drawer</strong>.
+              </p>
+              <p>
+                Inside you'll find plain-English clinch/elimination requirements, a <strong>Week Outcome Matrix</strong> showing how a <code>2-0</code>, <code>1-1</code>, or <code>0-2</code> week changes their record and Magic #, and their full remaining H2H schedule.
+              </p>
+            </div>
+
+            <div className="model-card">
+              <div className="model-card-header">
+                <span className="model-card-tag">WHAT-IF PLAYOFF MACHINE</span>
+                <h4>8. Interactive Week-by-Week Simulator</h4>
+              </div>
+              <p>
+                Switch to the <strong>What-If Machine</strong> tab to pick H2H matchup winners and weekly top-half League Median winners across all remaining regular-season weeks (strictly enforcing the 50% league median cap).
+              </p>
+              <p>
+                Use <strong>Auto-Pick Chalk</strong> to fill remaining weeks by current seed or test custom upset paths to see live projected playoff seeds and seed-delta shifts.
               </p>
             </div>
           </div>
