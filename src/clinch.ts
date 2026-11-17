@@ -184,7 +184,8 @@ export function analyzeLeagueClinch(
   const hasMedianMatch = Number(data.league.settings.league_average_match) === 1
   const gamesPerWeek = hasMedianMatch ? 2 : 1
   const playoffSpots = Math.min(totalTeams, Math.max(1, Number(data.league.settings.playoff_teams) || 6))
-  const byeSpots = playoffSpots >= 6 ? 2 : playoffSpots >= 4 ? 0 : 0
+  const nextPow2 = 2 ** Math.ceil(Math.log2(playoffSpots))
+  const byeSpots = playoffSpots >= 5 && nextPow2 > playoffSpots ? nextPow2 - playoffSpots : 0
   const playoffStart = Number(data.league.settings.playoff_week_start) || 15
   const regularSeasonEnd = Math.min(18, Math.max(1, playoffStart - 1))
   const currentWeek = Math.min(18, Math.max(1, data.currentWeek || 1))
@@ -310,7 +311,8 @@ export function analyzeLeagueClinch(
     }
 
     // Evaluate each roster in this week
-    for (const item of weekScores) {
+    for (let itemIndex = 0; itemIndex < weekScores.length; itemIndex += 1) {
+      const item = weekScores[itemIndex]
       const acc = accumulators.get(item.rosterId)!
       const teamScore = item.points
       acc.pointsFor += teamScore
@@ -359,7 +361,7 @@ export function analyzeLeagueClinch(
       // 3. All-Play Expected Wins
       let allPlayBeaten = 0
       let allPlayTies = 0
-      const otherScores = scoreValues.filter((_, idx) => idx !== scoreValues.indexOf(teamScore))
+      const otherScores = scoreValues.filter((_, idx) => idx !== itemIndex)
       for (const s of otherScores) {
         if (Math.abs(teamScore - s) < 0.005) allPlayTies += 1
         else if (teamScore > s) allPlayBeaten += 1
@@ -433,6 +435,217 @@ export function analyzeLeagueClinch(
   const byeCutoffTeam = byeSpots > 0 ? sortedTeams[byeSpots - 1] : null // Seed 2
   const byeChaserTeam = byeSpots > 0 ? sortedTeams[byeSpots] : null // Seed 3
 
+  // Build remaining head-to-head schedule matrix so contenders playing each other are factored into clinch/elimination math
+  const pairKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`)
+  const remainingPairGames = new Map<string, number>()
+  const upcomingStartWeek = effectiveCompletedWeeks + 1
+  for (let w = upcomingStartWeek; w <= regularSeasonEnd; w += 1) {
+    const wFeed = data.weeks[w]
+    if (!wFeed?.matchups?.length) continue
+    const byMatchup = new Map<number, number[]>()
+    for (const m of wFeed.matchups) {
+      if (m.matchup_id != null) {
+        const list = byMatchup.get(m.matchup_id) || []
+        list.push(m.roster_id)
+        byMatchup.set(m.matchup_id, list)
+      }
+    }
+    for (const pair of byMatchup.values()) {
+      if (pair.length === 2 && pair[0] !== pair[1]) {
+        const key = pairKey(pair[0], pair[1])
+        remainingPairGames.set(key, (remainingPairGames.get(key) ?? 0) + 1)
+      }
+    }
+  }
+
+  const getPairH2hGames = (a: number, b: number): number => {
+    if (a === b) return 0
+    return remainingPairGames.get(pairKey(a, b)) ?? 0
+  }
+
+  const maxMedianWinnersPerWeek = Math.floor(totalTeams / 2)
+  const maxMedianLosersPerWeek = Math.ceil(totalTeams / 2)
+
+  // Exact Max-Flow / Hall condition check: can `requiredCount` other teams SIMULTANEOUSLY reach `targetWins`?
+  function canKTeamsSurpassTarget(
+    teamId: number,
+    targetWins: number,
+    teamPointsFor: number,
+    useTiebreaker: boolean,
+    requiredCount: number,
+  ): boolean {
+    if (requiredCount <= 0) return true
+    let alreadyAboveCount = 0
+    const candidates: { rosterId: number; need: number; maxRem: number }[] = []
+
+    for (const other of sortedTeams) {
+      if (other.rosterId === teamId) continue
+      const tiesAtTargetWin = !useTiebreaker || other.pointsFor >= teamPointsFor
+      const minFinalWinsNeeded = tiesAtTargetWin
+        ? targetWins
+        : Math.floor(targetWins) + 1
+      const need = Math.max(0, Math.ceil(minFinalWinsNeeded - other.effectiveWins))
+
+      if (need === 0) {
+        alreadyAboveCount += 1
+      } else if (need <= remainingGamesPerTeam) {
+        candidates.push({
+          rosterId: other.rosterId,
+          need,
+          maxRem: remainingGamesPerTeam,
+        })
+      }
+    }
+
+    const neededFromCandidates = requiredCount - alreadyAboveCount
+    if (neededFromCandidates <= 0) return true
+    if (candidates.length < neededFromCandidates) return false
+
+    candidates.sort((a, b) => a.need - b.need)
+    const active = candidates.slice(0, 14)
+    const m = active.length
+    if (m < neededFromCandidates) return false
+
+    const totalMasks = 1 << m
+    const feasible = new Uint8Array(totalMasks)
+    const sumNeed = new Int16Array(totalMasks)
+    const sumMaxRem = new Int16Array(totalMasks)
+    const internalH2h = new Int16Array(totalMasks)
+    const popcounts = new Uint8Array(totalMasks)
+    feasible[0] = 1
+
+    for (let mask = 1; mask < totalMasks; mask += 1) {
+      const lsb = mask & -mask
+      const bitIdx = Math.clz32(lsb) ^ 31
+      const prevMask = mask ^ lsb
+      const count = popcounts[prevMask] + 1
+      popcounts[mask] = count
+      sumNeed[mask] = sumNeed[prevMask] + active[bitIdx].need
+      sumMaxRem[mask] = sumMaxRem[prevMask] + active[bitIdx].maxRem
+
+      let addedH2h = 0
+      for (let j = 0; j < m; j += 1) {
+        if (prevMask & (1 << j)) {
+          addedH2h += getPairH2hGames(active[bitIdx].rosterId, active[j].rosterId)
+        }
+      }
+      internalH2h[mask] = internalH2h[prevMask] + addedH2h
+
+      const medianOverflow = hasMedianMatch
+        ? remainingWeeks * Math.max(0, count - maxMedianWinnersPerWeek)
+        : 0
+      const maxWinsAvailable = sumMaxRem[mask] - internalH2h[mask] - medianOverflow
+
+      if (sumNeed[mask] <= maxWinsAvailable) {
+        let allSubmasksOk = true
+        for (let j = 0; j < m; j += 1) {
+          if ((mask & (1 << j)) && !feasible[mask ^ (1 << j)]) {
+            allSubmasksOk = false
+            break
+          }
+        }
+        if (allSubmasksOk) {
+          feasible[mask] = 1
+          if (count >= neededFromCandidates) return true
+        }
+      }
+    }
+
+    return false
+  }
+
+  // Exact dual Max-Flow / Hall check: when `teamId` wins out to `teamMaxWins`, can at least `totalTeams - spotCount` other teams stay below `teamId`?
+  function canTeamFinishTopK(
+    teamId: number,
+    teamMaxWins: number,
+    teamPointsFor: number,
+    useTiebreaker: boolean,
+    spotCount: number,
+  ): boolean {
+    const requiredSafeTeams = totalTeams - spotCount
+    if (requiredSafeTeams <= 0) return true
+
+    let alwaysBelowCount = 0
+    const candidates: { rosterId: number; slack: number }[] = []
+
+    for (const other of sortedTeams) {
+      if (other.rosterId === teamId) continue
+      const gamesVsTeam = getPairH2hGames(teamId, other.rosterId)
+      const maxRemExcludingTeam = Math.max(0, remainingGamesPerTeam - gamesVsTeam)
+
+      const otherWinsTie = useTiebreaker && other.pointsFor > teamPointsFor
+      const slack = otherWinsTie
+        ? Math.ceil(teamMaxWins - other.effectiveWins) - 1
+        : Math.floor(teamMaxWins - other.effectiveWins)
+
+      if (slack < 0) {
+        continue
+      }
+      if (slack >= maxRemExcludingTeam) {
+        alwaysBelowCount += 1
+      } else {
+        candidates.push({
+          rosterId: other.rosterId,
+          slack,
+        })
+      }
+    }
+
+    const neededFromCandidates = requiredSafeTeams - alwaysBelowCount
+    if (neededFromCandidates <= 0) return true
+    if (candidates.length < neededFromCandidates) return false
+
+    candidates.sort((a, b) => b.slack - a.slack)
+    const active = candidates.slice(0, 14)
+    const m = active.length
+    if (m < neededFromCandidates) return false
+
+    const totalMasks = 1 << m
+    const feasible = new Uint8Array(totalMasks)
+    const sumSlack = new Int16Array(totalMasks)
+    const internalH2h = new Int16Array(totalMasks)
+    const popcounts = new Uint8Array(totalMasks)
+    feasible[0] = 1
+
+    for (let mask = 1; mask < totalMasks; mask += 1) {
+      const lsb = mask & -mask
+      const bitIdx = Math.clz32(lsb) ^ 31
+      const prevMask = mask ^ lsb
+      const count = popcounts[prevMask] + 1
+      popcounts[mask] = count
+      sumSlack[mask] = sumSlack[prevMask] + active[bitIdx].slack
+
+      let addedH2h = 0
+      for (let j = 0; j < m; j += 1) {
+        if (prevMask & (1 << j)) {
+          addedH2h += getPairH2hGames(active[bitIdx].rosterId, active[j].rosterId)
+        }
+      }
+      internalH2h[mask] = internalH2h[prevMask] + addedH2h
+
+      const guaranteedMedianWins = hasMedianMatch
+        ? remainingWeeks * Math.max(0, count - maxMedianLosersPerWeek)
+        : 0
+      const minGuaranteedWins = internalH2h[mask] + guaranteedMedianWins
+
+      if (minGuaranteedWins <= sumSlack[mask]) {
+        let allSubmasksOk = true
+        for (let j = 0; j < m; j += 1) {
+          if ((mask & (1 << j)) && !feasible[mask ^ (1 << j)]) {
+            allSubmasksOk = false
+            break
+          }
+        }
+        if (allSubmasksOk) {
+          feasible[mask] = 1
+          if (count >= neededFromCandidates) return true
+        }
+      }
+    }
+
+    return false
+  }
+
   const profiles: TeamClinchProfile[] = sortedTeams.map((entry, index) => {
     const seed = index + 1
     const { acc, totalWins, totalLosses, totalTies, effectiveWins, winPercentage, pointsFor, pointsAgainst } = entry
@@ -449,83 +662,119 @@ export function analyzeLeagueClinch(
     const medianWinPct = medianGames > 0 ? acc.medianWins / medianGames : 0.5
 
     // -------------------------------------------------------------
-    // PLAYOFF CLINCH LOGIC (Top 6)
+    // PLAYOFF CLINCH LOGIC (Schedule-Aware Top K)
     // -------------------------------------------------------------
-    let teamsThatCanSurpass = 0
-    for (const other of sortedTeams) {
-      if (other.rosterId === entry.rosterId) continue
-      const otherMax = other.effectiveWins + remainingGamesPerTeam
-      if (otherMax > effectiveWins || (otherMax === effectiveWins && other.pointsFor >= pointsFor)) {
-        teamsThatCanSurpass += 1
-      }
-    }
-    const hasClinchedPlayoff = teamsThatCanSurpass < playoffSpots
+    const hasClinchedPlayoff = !canKTeamsSurpassTarget(
+      entry.rosterId,
+      effectiveWins,
+      pointsFor,
+      true,
+      playoffSpots,
+    )
 
-    const isEliminatedFromPlayoffs = cutoffTeam
-      ? (maxPossibleWins < cutoffTeam.effectiveWins || (maxPossibleWins === cutoffTeam.effectiveWins && pointsFor < cutoffTeam.pointsFor))
-      : false
+    const isEliminatedFromPlayoffs = !canTeamFinishTopK(
+      entry.rosterId,
+      maxPossibleWins,
+      pointsFor,
+      true,
+      playoffSpots,
+    )
 
-    // Magic Number for Playoff (Seed K) - Only for teams inside playoff cutoff
+    // Schedule-aware Magic Number for Playoff (Seed K) - accounts for contenders playing each other
     let magicNumber: number | null = null
+    let playoffCannibalizedLosses = 0
     if (hasClinchedPlayoff) {
       magicNumber = 0
     } else if (isEliminatedFromPlayoffs || seed > playoffSpots) {
       magicNumber = null
     } else if (chaserTeam) {
-      const chaserMax = chaserTeam.effectiveWins + remainingGamesPerTeam
-      magicNumber = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
+      const chaserMax = Math.ceil(chaserTeam.effectiveWins + remainingGamesPerTeam)
+      const naiveMagic = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
+      let maxSimultaneousThreatWins = Math.floor(effectiveWins)
+      for (let w = chaserMax; w >= Math.floor(effectiveWins); w -= 1) {
+        if (canKTeamsSurpassTarget(entry.rosterId, w, Infinity, false, playoffSpots)) {
+          maxSimultaneousThreatWins = w
+          break
+        }
+      }
+      magicNumber = Math.max(1, Math.ceil(maxSimultaneousThreatWins + 1 - effectiveWins))
+      playoffCannibalizedLosses = Math.max(0, naiveMagic - magicNumber)
     }
 
-    // Elimination Number for Playoff (Seed K) - Only for teams outside playoff cutoff
+    // Schedule-aware Elimination Number for Playoff (Seed K) - accounts for cutoff rivals playing each other
     let eliminationNumber: number | null = null
+    let playoffGuaranteedCutoffWins = 0
     if (hasClinchedPlayoff || seed <= playoffSpots) {
       eliminationNumber = null
     } else if (isEliminatedFromPlayoffs) {
       eliminationNumber = 0
     } else if (cutoffTeam) {
-      eliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - cutoffTeam.effectiveWins))
+      const baseCutoffWins = Math.floor(cutoffTeam.effectiveWins)
+      const naiveElim = Math.max(1, Math.ceil(maxPossibleWins + 1 - cutoffTeam.effectiveWins))
+      let effectiveCutoffFloor = cutoffTeam.effectiveWins
+      for (let w = baseCutoffWins; w <= Math.ceil(maxPossibleWins); w += 1) {
+        if (canTeamFinishTopK(entry.rosterId, w, Infinity, false, playoffSpots)) {
+          effectiveCutoffFloor = Math.max(cutoffTeam.effectiveWins, w)
+          break
+        }
+      }
+      eliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - effectiveCutoffFloor))
+      playoffGuaranteedCutoffWins = Math.max(0, naiveElim - eliminationNumber)
     }
 
     const gamesBehindCutoff = cutoffTeam ? cutoffTeam.effectiveWins - effectiveWins : 0
 
     // -------------------------------------------------------------
-    // FIRST-ROUND BYE CLINCH LOGIC (Top 2)
+    // FIRST-ROUND BYE CLINCH LOGIC (Schedule-Aware Top B)
     // -------------------------------------------------------------
-    let teamsThatCanSurpassForBye = 0
-    if (byeSpots > 0) {
-      for (const other of sortedTeams) {
-        if (other.rosterId === entry.rosterId) continue
-        const otherMax = other.effectiveWins + remainingGamesPerTeam
-        if (otherMax > effectiveWins || (otherMax === effectiveWins && other.pointsFor >= pointsFor)) {
-          teamsThatCanSurpassForBye += 1
-        }
-      }
-    }
-    const hasClinchedBye = byeSpots > 0 && teamsThatCanSurpassForBye < byeSpots
+    const hasClinchedBye =
+      byeSpots > 0 &&
+      !canKTeamsSurpassTarget(entry.rosterId, effectiveWins, pointsFor, true, byeSpots)
 
-    const isEliminatedFromBye = byeSpots > 0 && byeCutoffTeam
-      ? (maxPossibleWins < byeCutoffTeam.effectiveWins || (maxPossibleWins === byeCutoffTeam.effectiveWins && pointsFor < byeCutoffTeam.pointsFor))
-      : true
+    const isEliminatedFromBye =
+      byeSpots === 0 ||
+      !canTeamFinishTopK(entry.rosterId, maxPossibleWins, pointsFor, true, byeSpots)
 
-    // Magic Number for Bye (Seed 1 & 2 vs Seed 3) - Only for teams in top B
+    // Schedule-aware Magic Number for Bye (Seed 1 & 2 vs Seed 3+) - accounts for bye contenders playing each other
     let byeMagicNumber: number | null = null
+    let byeCannibalizedLosses = 0
     if (hasClinchedBye) {
       byeMagicNumber = 0
     } else if (isEliminatedFromBye || seed > byeSpots) {
       byeMagicNumber = null
     } else if (byeChaserTeam) {
-      const byeChaserMax = byeChaserTeam.effectiveWins + remainingGamesPerTeam
-      byeMagicNumber = Math.max(1, Math.ceil(byeChaserMax + 1 - effectiveWins))
+      const byeChaserMax = Math.ceil(byeChaserTeam.effectiveWins + remainingGamesPerTeam)
+      const naiveByeMagic = Math.max(1, Math.ceil(byeChaserMax + 1 - effectiveWins))
+      let maxSimultaneousByeThreatWins = Math.floor(effectiveWins)
+      for (let w = byeChaserMax; w >= Math.floor(effectiveWins); w -= 1) {
+        if (canKTeamsSurpassTarget(entry.rosterId, w, Infinity, false, byeSpots)) {
+          maxSimultaneousByeThreatWins = w
+          break
+        }
+      }
+      byeMagicNumber = Math.max(1, Math.ceil(maxSimultaneousByeThreatWins + 1 - effectiveWins))
+      byeCannibalizedLosses = Math.max(0, naiveByeMagic - byeMagicNumber)
     }
 
-    // Elimination Number for Bye (Seed 3+ vs Seed 2) - Only for teams outside top B
+    // Schedule-aware Elimination Number for Bye (Seed 3+ vs Seed 2) - accounts for top contenders playing each other
     let byeEliminationNumber: number | null = null
+    let byeGuaranteedCutoffWins = 0
     if (hasClinchedBye || seed <= byeSpots) {
       byeEliminationNumber = null
     } else if (isEliminatedFromBye) {
       byeEliminationNumber = 0
     } else if (byeCutoffTeam) {
-      byeEliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - byeCutoffTeam.effectiveWins))
+      const baseByeFloor = Math.floor(byeCutoffTeam.effectiveWins)
+      const naiveByeElim = Math.max(1, Math.ceil(maxPossibleWins + 1 - byeCutoffTeam.effectiveWins))
+      let effectiveByeFloor = byeCutoffTeam.effectiveWins
+      for (let w = baseByeFloor; w <= Math.ceil(maxPossibleWins); w += 1) {
+        if (canTeamFinishTopK(entry.rosterId, w, Infinity, false, byeSpots)) {
+          effectiveByeFloor = Math.max(byeCutoffTeam.effectiveWins, w)
+          break
+        }
+      }
+      byeEliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - effectiveByeFloor))
+      byeGuaranteedCutoffWins = Math.max(0, naiveByeElim - byeEliminationNumber)
     }
 
     const gamesBehindBye = byeCutoffTeam ? byeCutoffTeam.effectiveWins - effectiveWins : 0
@@ -647,14 +896,22 @@ export function analyzeLeagueClinch(
     // -------------------------------------------------------------
     let magicNumberExplanation = ''
     if (hasClinchedPlayoff) {
-      magicNumberExplanation = 'Clinched Playoff Spot. Locked in the top 6.'
+      magicNumberExplanation = `Clinched Playoff Spot. Locked in the top ${playoffSpots}.`
     } else if (isEliminatedFromPlayoffs) {
       magicNumberExplanation = 'Mathematically eliminated from the playoff bracket.'
     } else if (seed <= playoffSpots && magicNumber !== null) {
-      magicNumberExplanation = `Playoff Magic Number: ${magicNumber}. Needs any combination of ${magicNumber} team wins and ${chaserTeam?.acc.name ?? 'Seed 7'} losses across remaining weeks to guarantee a playoff berth.`
+      const schedNote =
+        playoffCannibalizedLosses > 0
+          ? ` (already reduced by ${playoffCannibalizedLosses} guaranteed loss${playoffCannibalizedLosses > 1 ? 'es' : ''} from contenders playing each other)`
+          : ''
+      magicNumberExplanation = `Playoff Magic Number: ${magicNumber}${schedNote}. Needs any combination of ${magicNumber} team wins and ${chaserTeam?.acc.name ?? 'Seed 7'} losses across remaining weeks to guarantee a playoff berth.`
     } else {
       const behindText = gamesBehindCutoff === 0 ? 'tied with' : `${gamesBehindCutoff.toFixed(1)} games behind`
-      magicNumberExplanation = `Elimination Number: ${eliminationNumber}. Currently ${behindText} ${cutoffTeam?.acc.name ?? 'Seed 6'}. Any combination of ${eliminationNumber} team losses and ${cutoffTeam?.acc.name ?? 'Seed 6'} wins results in mathematical elimination.`
+      const schedNote =
+        playoffGuaranteedCutoffWins > 0
+          ? ` (tightened by ${playoffGuaranteedCutoffWins} game${playoffGuaranteedCutoffWins > 1 ? 's' : ''} because cutoff rivals play each other)`
+          : ''
+      magicNumberExplanation = `Elimination Number: ${eliminationNumber}${schedNote}. Currently ${behindText} ${cutoffTeam?.acc.name ?? 'Seed 6'}. Any combination of ${eliminationNumber} team losses and ${cutoffTeam?.acc.name ?? 'Seed 6'} wins results in mathematical elimination.`
     }
 
     let byeExplanation = ''
@@ -664,9 +921,17 @@ export function analyzeLeagueClinch(
       } else if (isEliminatedFromBye) {
         byeExplanation = 'Eliminated from First-Round Bye contention.'
       } else if (seed <= byeSpots && byeMagicNumber !== null) {
-        byeExplanation = `Bye Magic Number: ${byeMagicNumber}. Needs any combination of ${byeMagicNumber} team wins and ${byeChaserTeam?.acc.name ?? 'Seed 3'} losses to secure a top-2 first-round bye.`
+        const schedNote =
+          byeCannibalizedLosses > 0
+            ? ` (already reduced by ${byeCannibalizedLosses} guaranteed loss${byeCannibalizedLosses > 1 ? 'es' : ''} from bye contenders playing each other)`
+            : ''
+        byeExplanation = `Bye Magic Number: ${byeMagicNumber}${schedNote}. Needs any combination of ${byeMagicNumber} team wins and ${byeChaserTeam?.acc.name ?? 'Seed 3'} losses to secure a top-2 first-round bye.`
       } else {
-        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}. Trails Seed #2 (${byeCutoffTeam?.acc.name ?? 'Seed 2'}) by ${gamesBehindBye.toFixed(1)} games.`
+        const schedNote =
+          byeGuaranteedCutoffWins > 0
+            ? ` (tightened by ${byeGuaranteedCutoffWins} game${byeGuaranteedCutoffWins > 1 ? 's' : ''} because bye contenders play each other)`
+            : ''
+        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}${schedNote}. Trails Seed #2 (${byeCutoffTeam?.acc.name ?? 'Seed 2'}) by ${gamesBehindBye.toFixed(1)} games.`
       }
     }
 

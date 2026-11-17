@@ -114,6 +114,16 @@ export interface WeekMatchupFeed {
   matchups: SleeperMatchup[]
 }
 
+export interface UserLeagueSummary {
+  league_id: string
+  name: string
+  season: string
+  total_rosters: number
+  status: string
+  isDynasty: boolean
+  hasMedian: boolean
+}
+
 export interface LeagueData {
   league: SleeperLeague
   rosters: SleeperRoster[]
@@ -131,26 +141,65 @@ export interface LeagueData {
 
 const SLEEPER_API = 'https://api.sleeper.app/v1'
 
-async function getJson<T>(url: string): Promise<T> {
-  const response = await fetch(url)
+async function getJson<T>(url: string, signal?: AbortSignal, notFoundMessage?: string): Promise<T> {
+  const response = await fetch(url, { signal })
   if (!response.ok) {
-    if (response.status === 404) {
-      throw new Error(`Sleeper league not found. Please verify the League ID.`)
+    if (response.status === 404 && notFoundMessage) {
+      throw new Error(notFoundMessage)
     }
     throw new Error(`Request failed (${response.status}): ${url}`)
   }
   return response.json() as Promise<T>
 }
 
-export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
+export async function fetchUserLeagues(usernameOrId: string, signal?: AbortSignal): Promise<UserLeagueSummary[]> {
+  const cleaned = usernameOrId.trim().replace(/^@+/, '').trim()
+  if (!cleaned) return []
+
+  const user = await getJson<{ user_id?: string; display_name?: string } | null>(
+    `${SLEEPER_API}/user/${encodeURIComponent(cleaned)}`,
+    signal,
+    `Sleeper user "${cleaned}" not found.`,
+  )
+  if (!user?.user_id) {
+    throw new Error(`Sleeper user "${cleaned}" not found.`)
+  }
+
+  const nflState = await getJson<NflState>(`${SLEEPER_API}/state/nfl`, signal)
+  const season = nflState.league_season || nflState.season || String(new Date().getFullYear())
+  const leagues = await getJson<SleeperLeague[]>(
+    `${SLEEPER_API}/user/${user.user_id}/leagues/nfl/${season}`,
+    signal,
+  )
+
+  return (leagues ?? [])
+    .filter((league) => league.status === 'in_season' || league.status === 'complete')
+    .map((league) => ({
+      league_id: league.league_id,
+      name: league.name,
+      season: league.season || season,
+      total_rosters: league.total_rosters,
+      status: league.status,
+      isDynasty: Number(league.settings?.type) === 2,
+      hasMedian: Number(league.settings?.league_average_match) === 1,
+    }))
+    .sort(
+      (a, b) =>
+        Number(b.status === 'in_season') - Number(a.status === 'in_season') ||
+        Number(b.isDynasty) - Number(a.isDynasty) ||
+        a.name.localeCompare(b.name),
+    )
+}
+
+export async function loadLeagueData(leagueId: string, signal?: AbortSignal): Promise<LeagueData> {
   const cleanId = leagueId.trim()
-  if (!cleanId) throw new Error('Please enter a Sleeper League ID.')
+  if (!cleanId) throw new Error('Please enter a Sleeper League ID or @username.')
 
   const [league, rosters, users, nflState] = await Promise.all([
-    getJson<SleeperLeague>(`${SLEEPER_API}/league/${cleanId}`),
-    getJson<SleeperRoster[]>(`${SLEEPER_API}/league/${cleanId}/rosters`),
-    getJson<SleeperUser[]>(`${SLEEPER_API}/league/${cleanId}/users`),
-    getJson<NflState>(`${SLEEPER_API}/state/nfl`),
+    getJson<SleeperLeague>(`${SLEEPER_API}/league/${cleanId}`, signal, 'Sleeper league not found. Please verify the League ID.'),
+    getJson<SleeperRoster[]>(`${SLEEPER_API}/league/${cleanId}/rosters`, signal),
+    getJson<SleeperUser[]>(`${SLEEPER_API}/league/${cleanId}/users`, signal),
+    getJson<NflState>(`${SLEEPER_API}/state/nfl`, signal),
   ])
 
   if (!league || !league.league_id) {
@@ -172,11 +221,17 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
   const targetEndWeek = Math.min(18, Math.max(regularSeasonWeeks, currentWeek, lastScoredWeek, 1))
   const weekNumbers = Array.from({ length: targetEndWeek }, (_, i) => i + 1)
 
+  const catchNonAbort = <T,>(fallback: T) => (err: unknown): T => {
+    if (signal?.aborted) throw err
+    return fallback
+  }
+
   const weekResults = await Promise.all(
     weekNumbers.map(async (week) => {
       const matchups = await getJson<SleeperMatchup[]>(
         `${SLEEPER_API}/league/${cleanId}/matchups/${week}`,
-      ).catch(() => [])
+        signal,
+      ).catch(catchNonAbort<SleeperMatchup[]>([]))
       return { week, matchups }
     }),
   )
@@ -194,13 +249,16 @@ export async function loadLeagueData(leagueId: string): Promise<LeagueData> {
       const [projItems, weekStats, scoreboard] = await Promise.all([
         getJson<SleeperProjectionItem[]>(
           `https://api.sleeper.com/projections/nfl/${season}/${currentWeek}?season_type=regular`,
-        ).catch(() => []),
+          signal,
+        ).catch(catchNonAbort<SleeperProjectionItem[]>([])),
         getJson<Record<string, Record<string, number>>>(
           `${SLEEPER_API}/stats/nfl/regular/${season}/${currentWeek}?season_type=regular`,
-        ).catch(() => ({}) as Record<string, Record<string, number>>),
+          signal,
+        ).catch(catchNonAbort<Record<string, Record<string, number>>>({})),
         getJson<EspnScoreboard>(
           `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${currentWeek}&year=${season}`,
-        ).catch(() => null),
+          signal,
+        ).catch(catchNonAbort<EspnScoreboard | null>(null)),
       ])
 
       const teamProgress = new Map<string, { state: 'pre' | 'in' | 'post'; progress: number }>()

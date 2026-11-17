@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   ChevronDown,
@@ -8,7 +8,6 @@ import {
   Flame,
   RefreshCw,
   RotateCcw,
-  Share2,
   ShieldAlert,
   ShieldCheck,
   Target,
@@ -20,11 +19,51 @@ import {
   type LeagueClinchSummary,
   type TeamClinchProfile,
 } from './clinch'
+import { LeagueControl, type RecentLeague } from './components/LeagueControl'
 import { getDemoLeagueData } from './demoData'
-import { loadLeagueData, type LeagueData } from './sleeper'
+import { fetchUserLeagues, loadLeagueData, type LeagueData, type UserLeagueSummary } from './sleeper'
 import './App.css'
 
 type MainTab = 'clinch' | 'whatif'
+
+const RECENT_LEAGUES_KEY = 'fantasy-playoffs-recent-leagues-v1'
+const MAX_RECENT_LEAGUES = 5
+
+function isAbortError(reason: unknown): boolean {
+  return (reason instanceof DOMException && reason.name === 'AbortError')
+    || (reason instanceof Error && reason.name === 'AbortError')
+}
+
+function readRecentLeagues(): RecentLeague[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(RECENT_LEAGUES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is RecentLeague =>
+        Boolean(item) && typeof item === 'object'
+        && typeof (item as RecentLeague).id === 'string'
+        && typeof (item as RecentLeague).name === 'string'
+        && typeof (item as RecentLeague).season === 'string',
+    ).slice(0, MAX_RECENT_LEAGUES)
+  } catch {
+    return []
+  }
+}
+
+function writeRecentLeagues(entries: RecentLeague[]) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(RECENT_LEAGUES_KEY, JSON.stringify(entries.slice(0, MAX_RECENT_LEAGUES)))
+  } catch {
+    // Ignore storage quota / privacy mode errors
+  }
+}
+
+const formatRecord = (wins: number, losses: number, ties = 0, sep = '–') =>
+  ties > 0 ? `${wins}${sep}${losses}${sep}${ties}` : `${wins}${sep}${losses}`
 
 const formatDec = (val: number, decimals = 1) =>
   val.toLocaleString('en-US', {
@@ -46,8 +85,6 @@ function getInitialLeagueId(): string {
     if (fromQuery && fromQuery.trim()) return fromQuery.trim()
     const fromHash = window.location.hash.replace(/^#\/?/, '').trim()
     if (fromHash && /^\d+$/.test(fromHash)) return fromHash
-    const saved = localStorage.getItem('last_playoffs_league_id')
-    if (saved && saved.trim() && !saved.startsWith('demo')) return saved.trim()
   }
   return ''
 }
@@ -63,8 +100,8 @@ function getInitialTab(): MainTab {
 }
 
 export function App() {
-  const initialId = useMemo(getInitialLeagueId, [])
-  const initialTab = useMemo(getInitialTab, [])
+  const initialId = useMemo(() => getInitialLeagueId(), [])
+  const initialTab = useMemo(() => getInitialTab(), [])
   const [leagueId, setLeagueId] = useState(initialId)
   const [data, setData] = useState<LeagueData | null>(null)
   const [busy, setBusy] = useState(Boolean(initialId))
@@ -74,23 +111,49 @@ export function App() {
   const [copied, setCopied] = useState(false)
   const [includeLiveWeek, setIncludeLiveWeek] = useState<boolean>(false)
   const [selectedTeamRosterId, setSelectedTeamRosterId] = useState<number | null>(null)
+  const [recentLeagues, setRecentLeagues] = useState<RecentLeague[]>(() => readRecentLeagues())
+  const [userLeagues, setUserLeagues] = useState<UserLeagueSummary[]>([])
+  const [resolvedUserLabel, setResolvedUserLabel] = useState('')
+  const abortRef = useRef<AbortController | null>(null)
 
   // What-If Machine State
   const [simSelectedWeek, setSimSelectedWeek] = useState<number>(9)
   const [simMatchupWinners, setSimMatchupWinners] = useState<Record<number, Record<number, number>>>({})
   const [simMedianWinners, setSimMedianWinners] = useState<Record<number, Record<number, boolean>>>({})
 
-  async function refresh(targetId?: string) {
-    const activeId = (targetId ?? leagueId).trim()
-    if (!activeId) {
-      setData(null)
-      setBusy(false)
-      setError('')
-      return
+  const recordRecentLeague = useCallback((next: LeagueData) => {
+    const entry: RecentLeague = {
+      id: next.league.league_id,
+      name: next.league.name || `League ${next.league.league_id}`,
+      season: next.league.season,
+    }
+    setRecentLeagues((prev) => {
+      const merged = [entry, ...prev.filter((item) => item.id !== entry.id)].slice(0, MAX_RECENT_LEAGUES)
+      writeRecentLeagues(merged)
+      return merged
+    })
+  }, [])
+
+  const loadLeagueById = useCallback(async (rawId: string, clearUserPicker = false) => {
+    const activeId = rawId.trim()
+    if (!activeId) return
+
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    if (clearUserPicker) {
+      setUserLeagues([])
+      setResolvedUserLabel('')
     }
 
+    setLeagueId(activeId)
     setBusy(true)
     setError('')
+    setSelectedTeamRosterId(null)
+    setSimMatchupWinners({})
+    setSimMedianWinners({})
+
     try {
       if (activeId === 'demo' || activeId === 'demo-median-league') {
         const demo = getDemoLeagueData()
@@ -98,9 +161,11 @@ export function App() {
         setLastUpdated(Date.now())
         return
       }
-      const nextData = await loadLeagueData(activeId)
+      const nextData = await loadLeagueData(activeId, controller.signal)
+      if (controller.signal.aborted) return
       setData(nextData)
-      setLastUpdated(Date.now())
+      setLastUpdated(nextData.lastUpdated)
+      recordRecentLeague(nextData)
       if (typeof window !== 'undefined') {
         const url = new URL(window.location.href)
         url.searchParams.set('league', activeId)
@@ -108,14 +173,89 @@ export function App() {
         localStorage.setItem('last_playoffs_league_id', activeId)
       }
     } catch (err) {
+      if (controller.signal.aborted || isAbortError(err)) return
       setError(err instanceof Error ? err.message : 'Could not load league data from Sleeper.')
     } finally {
+      if (abortRef.current === controller) {
+        setBusy(false)
+      }
+    }
+  }, [recordRecentLeague])
+
+  async function refresh(targetInput?: string) {
+    const queryInput = (targetInput ?? leagueId).trim()
+    if (!queryInput) {
+      setError('Please enter a Sleeper League ID or @username.')
       setBusy(false)
+      return
+    }
+
+    if (/^\d+$/.test(queryInput) || queryInput === 'demo' || queryInput === 'demo-median-league') {
+      await loadLeagueById(queryInput, true)
+      return
+    }
+
+    const cleanedUsername = queryInput.replace(/^@+/, '').trim()
+    if (!cleanedUsername) {
+      setError('Please enter a Sleeper League ID or @username.')
+      setBusy(false)
+      return
+    }
+
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    setBusy(true)
+    setError('')
+
+    try {
+      const leagues = await fetchUserLeagues(cleanedUsername, controller.signal)
+      if (controller.signal.aborted) return
+      if (!leagues.length) {
+        setUserLeagues([])
+        setResolvedUserLabel('')
+        setError(`No Sleeper leagues found for "@${cleanedUsername}".`)
+        return
+      }
+      setUserLeagues(leagues)
+      setResolvedUserLabel(cleanedUsername)
+      await loadLeagueById(leagues[0].league_id, false)
+    } catch (err) {
+      if (controller.signal.aborted || isAbortError(err)) return
+      setUserLeagues([])
+      setResolvedUserLabel('')
+      setError(err instanceof Error ? err.message : 'Could not find Sleeper user or leagues.')
+    } finally {
+      if (abortRef.current === controller) {
+        setBusy(false)
+      }
+    }
+  }
+
+  async function copyShareUrl() {
+    if (typeof window === 'undefined') return
+    const trimmed = leagueId.trim()
+    const activeId = data?.league.league_id ?? (/^\d+$/.test(trimmed) ? trimmed : '')
+    if (!activeId) return
+    const url = new URL(window.location.href)
+    url.searchParams.set('league', activeId)
+    const shareUrl = url.toString()
+    try {
+      await navigator.clipboard.writeText(shareUrl)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      window.prompt('Copy shareable league URL:', shareUrl)
     }
   }
 
   function handleLoadDemo() {
+    setUserLeagues([])
+    setResolvedUserLabel('')
     setLeagueId('demo')
+    setSelectedTeamRosterId(null)
+    setSimMatchupWinners({})
+    setSimMedianWinners({})
     const demo = getDemoLeagueData()
     setData(demo)
     setLastUpdated(Date.now())
@@ -123,12 +263,52 @@ export function App() {
   }
 
   useEffect(() => {
-    const id = getInitialLeagueId()
-    if (id) {
-      refresh(id)
+    if (!initialId) return
+    if (initialId === 'demo' || initialId === 'demo-median-league') return
+    const controller = new AbortController()
+    abortRef.current = controller
+
+    const runInitialLoad = async () => {
+      try {
+        if (/^\d+$/.test(initialId)) {
+          const nextData = await loadLeagueData(initialId, controller.signal)
+          if (controller.signal.aborted) return
+          setData(nextData)
+          setLastUpdated(nextData.lastUpdated)
+          recordRecentLeague(nextData)
+          return
+        }
+        const cleanedUsername = initialId.replace(/^@+/, '').trim()
+        if (!cleanedUsername) return
+        const leagues = await fetchUserLeagues(cleanedUsername, controller.signal)
+        if (controller.signal.aborted) return
+        if (!leagues.length) {
+          setError(`No active Sleeper leagues found for "@${cleanedUsername}".`)
+          return
+        }
+        setUserLeagues(leagues)
+        setResolvedUserLabel(cleanedUsername)
+        setLeagueId(leagues[0].league_id)
+        const nextData = await loadLeagueData(leagues[0].league_id, controller.signal)
+        if (controller.signal.aborted) return
+        setData(nextData)
+        setLastUpdated(nextData.lastUpdated)
+        recordRecentLeague(nextData)
+      } catch (err) {
+        if (controller.signal.aborted || isAbortError(err)) return
+        setError(err instanceof Error ? err.message : 'Could not load league data from Sleeper.')
+      } finally {
+        if (abortRef.current === controller) {
+          setBusy(false)
+        }
+      }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+
+    void runInitialLoad()
+    return () => {
+      controller.abort()
+    }
+  }, [initialId, recordRecentLeague])
 
   const clinchSummary: LeagueClinchSummary | null = useMemo(() => {
     if (!data) return null
@@ -140,13 +320,22 @@ export function App() {
     }
   }, [data, includeLiveWeek])
 
-  // Set default simSelectedWeek when data loads
-  const currentWeek = clinchSummary?.currentWeek
-  useEffect(() => {
-    if (currentWeek) {
-      setSimSelectedWeek(currentWeek)
+  // Start What-If simulation from the first uncounted week so live-scored weeks are never double-counted
+  const simStartWeek = useMemo(() => {
+    if (!clinchSummary) return 9
+    const candidate = clinchSummary.isUsingLiveWeek && clinchSummary.inProgressWeek != null
+      ? clinchSummary.inProgressWeek + 1
+      : Math.max(clinchSummary.currentWeek, clinchSummary.lastScoredWeek + 1)
+    return Math.min(clinchSummary.regularSeasonEnd, Math.max(1, candidate))
+  }, [clinchSummary])
+
+  const activeSimWeek = useMemo(() => {
+    const endWeek = clinchSummary?.regularSeasonEnd ?? 14
+    if (simSelectedWeek >= simStartWeek && simSelectedWeek <= endWeek) {
+      return simSelectedWeek
     }
-  }, [currentWeek])
+    return simStartWeek
+  }, [clinchSummary?.regularSeasonEnd, simSelectedWeek, simStartWeek])
 
   const selectedTeamProfile = useMemo(() => {
     if (!clinchSummary || selectedTeamRosterId === null) return null
@@ -199,7 +388,7 @@ export function App() {
     const nextMedians: Record<number, Record<number, boolean>> = {}
     const maxMedian = Math.floor(clinchSummary.totalTeams / 2)
 
-    for (let w = clinchSummary.currentWeek; w <= clinchSummary.regularSeasonEnd; w += 1) {
+    for (let w = simStartWeek; w <= clinchSummary.regularSeasonEnd; w += 1) {
       const feed = data.weeks[w]
       if (!feed) continue
       const weekWinners: Record<number, number> = {}
@@ -672,56 +861,21 @@ export function App() {
           </p>
         </div>
 
-        <div className="league-control">
-          <label htmlFor="league-id">SLEEPER LEAGUE ID</label>
-          <div className="league-input-row">
-            <input
-              id="league-id"
-              type="text"
-              value={leagueId}
-              onChange={(e) => setLeagueId(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') refresh()
-              }}
-              placeholder="e.g. 1329251955255574528"
-              aria-label="Sleeper League ID"
-              disabled={busy}
-            />
-            <button
-              type="button"
-              className={`share-button ${copied ? 'copied' : ''}`}
-              onClick={() => {
-                if (typeof window !== 'undefined') {
-                  navigator.clipboard.writeText(window.location.href)
-                  setCopied(true)
-                  setTimeout(() => setCopied(false), 2000)
-                }
-              }}
-              title="Copy shareable link"
-              disabled={busy || !leagueId.trim()}
-            >
-              {copied ? <Check size={13} /> : <Share2 size={13} />}
-              <span>{copied ? 'Copied' : 'Share'}</span>
-            </button>
-            <button
-              type="button"
-              className="refresh-button"
-              onClick={() => refresh()}
-              disabled={busy || !leagueId.trim()}
-            >
-              <RefreshCw size={13} className={busy ? 'spin' : ''} />
-              <span>{busy ? 'Loading…' : 'Refresh'}</span>
-            </button>
-          </div>
-          <div className="refresh-meta">
-            <Clock3 size={11} />
-            <span>
-              {lastUpdated
-                ? `UPDATED ${new Date(lastUpdated).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`
-                : 'ENTER LEAGUE ID AND CLICK REFRESH'}
-            </span>
-          </div>
-        </div>
+        <LeagueControl
+          leagueId={leagueId}
+          activeLeagueId={data?.league.league_id}
+          busy={busy}
+          copied={copied}
+          lastUpdated={lastUpdated}
+          userLeagues={userLeagues}
+          resolvedUserLabel={resolvedUserLabel}
+          recentLeagues={recentLeagues}
+          onLeagueIdChange={setLeagueId}
+          onRefresh={() => void refresh()}
+          onCopyShareUrl={() => void copyShareUrl()}
+          onSelectUserLeague={(id) => void loadLeagueById(id, false)}
+          onSelectRecentLeague={(id) => void loadLeagueById(id, true)}
+        />
       </section>
 
       {/* Error alert */}
@@ -729,6 +883,7 @@ export function App() {
         <div className="error-banner">
           <CircleAlert size={16} />
           <span>{error}</span>
+          <button type="button" onClick={() => void refresh()}>Retry</button>
         </div>
       )}
 
@@ -742,7 +897,7 @@ export function App() {
           <span className="summary-note">
             {clinchSummary
               ? `${clinchSummary.totalTeams} Teams · ${hasMedian ? '2 Wins/Wk (H2H + Median)' : '1 Win/Wk (H2H Only)'}`
-              : 'Enter Sleeper League ID above'}
+              : 'Enter League ID or @username above'}
           </span>
         </div>
 
@@ -766,44 +921,48 @@ export function App() {
 
         <div className="summary-item">
           <span className="summary-label">
-            <Crown size={11} className="label-icon" style={{ color: '#f59e0b' }} /> FIRST-ROUND BYE (TOP 2)
+            <Crown size={11} className="label-icon" style={{ color: '#f59e0b' }} /> {byeSpots > 0 ? `FIRST-ROUND BYE (TOP ${byeSpots})` : 'TOP SEED LEADER (#1)'}
           </span>
           <strong>
             {seed1 ? (
               <span className="lucky-val">
                 #1 {seed1.name}
                 <span className="kpi-luck-badge positive">
-                  {seed1.totalWins}–{seed1.totalLosses}
+                  {formatRecord(seed1.totalWins, seed1.totalLosses, seed1.totalTies)}
                 </span>
               </span>
             ) : '--'}
           </strong>
           <span className="summary-note">
-            {seed2 && seed3
-              ? `#2 ${seed2.name} (${seed2.totalWins}–${seed2.totalLosses}) leads #3 ${seed3.name} (${seed3.totalWins}–${seed3.totalLosses})`
-              : 'Seeds 1 & 2 earn bye to semifinals'}
+            {byeSpots > 0
+              ? (seed2 && seed3
+                  ? `#2 ${seed2.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)}) leads #3 ${seed3.name} (${formatRecord(seed3.totalWins, seed3.totalLosses, seed3.totalTies)})`
+                  : `Seeds 1–${byeSpots} earn bye to semifinals`)
+              : (seed2
+                  ? `Leads #2 ${seed2.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)})`
+                  : 'All playoff seeds play Round 1')}
           </span>
         </div>
 
         <div className="summary-item">
           <span className="summary-label">
-            <ShieldAlert size={11} className="label-icon" style={{ color: '#fbbf24' }} /> PLAYOFF BUBBLE (SEED 6 vs 7)
+            <ShieldAlert size={11} className="label-icon" style={{ color: '#fbbf24' }} /> PLAYOFF BUBBLE (SEED {playoffSpots} vs {playoffSpots + 1})
           </span>
           <strong>
             {seed6 ? (
               <span className="unlucky-val">
-                #6 {seed6.name}
+                #{playoffSpots} {seed6.name}
                 <span className="kpi-luck-badge positive">
-                  {seed6.totalWins}–{seed6.totalLosses}
+                  {formatRecord(seed6.totalWins, seed6.totalLosses, seed6.totalTies)}
                 </span>
               </span>
             ) : '--'}
           </strong>
           <span className="summary-note">
             {seed6 && seed7
-              ? seed6.totalWins === seed7.totalWins
-                ? `Tied with #7 ${seed7.name} (${seed7.totalWins}–${seed7.totalLosses}) · +${formatDec(seed6.pointsFor - seed7.pointsFor, 1)} PF`
-                : `Leads #7 ${seed7.name} (${seed7.totalWins}–${seed7.totalLosses}) · Magic #${seed6.magicNumber}`
+              ? (seed6.totalWins + seed6.totalTies * 0.5) === (seed7.totalWins + seed7.totalTies * 0.5)
+                ? `Tied with #${playoffSpots + 1} ${seed7.name} (${formatRecord(seed7.totalWins, seed7.totalLosses, seed7.totalTies)}) · +${formatDec(seed6.pointsFor - seed7.pointsFor, 1)} PF`
+                : `Leads #${playoffSpots + 1} ${seed7.name} (${formatRecord(seed7.totalWins, seed7.totalLosses, seed7.totalTies)}) · ${seed6.hasClinchedPlayoff ? 'Clinched' : `Magic #${seed6.magicNumber}`}`
               : 'Cutoff between playoffs and lottery'}
           </span>
         </div>
@@ -918,7 +1077,7 @@ export function App() {
                       <tr>
                         <td colSpan={9} style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--muted)', font: '12px var(--mono)' }}>
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px' }}>
-                            <span>Enter a Sleeper League ID above to decode playoff clinches.</span>
+                            <span>Enter a Sleeper League ID or @username above to decode playoff clinches.</span>
                             <button type="button" className="view-path-btn" onClick={handleLoadDemo}>
                               Try Demo League →
                             </button>
@@ -1097,7 +1256,7 @@ export function App() {
             <div className="mobile-cards-view">
               {filteredTeams.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '36px 16px', color: 'var(--muted)', font: '12px var(--mono)', background: 'var(--surface)', borderRadius: '8px', border: '1px solid var(--line)' }}>
-                  Enter a Sleeper League ID above to decode playoff clinches.
+                  Enter a Sleeper League ID or @username above to decode playoff clinches.
                 </div>
               ) : (
                 <div className="m-standings-card-list">
@@ -1160,9 +1319,9 @@ export function App() {
             <div className="sim-week-tabs">
               <span className="sim-week-label">SELECT WEEK TO SIMULATE:</span>
               {Array.from(
-                { length: Math.max(1, (clinchSummary?.regularSeasonEnd ?? 14) - (clinchSummary?.currentWeek ?? 9) + 1) },
+                { length: Math.max(1, (clinchSummary?.regularSeasonEnd ?? 14) - simStartWeek + 1) },
                 (_, i) => {
-                  const w = (clinchSummary?.currentWeek ?? 9) + i
+                  const w = simStartWeek + i
                   const picksInWeek =
                     Object.keys(simMatchupWinners[w] || {}).length +
                     Object.keys(simMedianWinners[w] || {}).length
@@ -1171,7 +1330,7 @@ export function App() {
                     <button
                       key={w}
                       type="button"
-                      className={`sim-week-pill ${simSelectedWeek === w ? 'selected' : ''}`}
+                      className={`sim-week-pill ${activeSimWeek === w ? 'selected' : ''}`}
                       onClick={() => setSimSelectedWeek(w)}
                     >
                       <span>WEEK {w}</span>
@@ -1185,12 +1344,12 @@ export function App() {
             {/* Matchup Cards for Selected Week */}
             <div className="sim-matchups-section">
               <h4 className="sim-section-title">
-                <span>WEEK {simSelectedWeek} MATCHUPS</span>
+                <span>WEEK {activeSimWeek} MATCHUPS</span>
                 <span className="sim-sub">Click a team to pick them as Head-to-Head winner (+1W, -1L to opponent)</span>
               </h4>
 
               {(() => {
-                const weekFeed = data?.weeks[simSelectedWeek]
+                const weekFeed = data?.weeks[activeSimWeek]
                 const matchups = weekFeed?.matchups || []
                 const pairs = new Map<number, typeof matchups>()
                 for (const m of matchups) {
@@ -1204,12 +1363,12 @@ export function App() {
                 if (pairs.size === 0) {
                   return (
                     <div className="no-matchups-box">
-                      No matchup data found for Week {simSelectedWeek}. Matchups might be scheduled closer to game day.
+                      No matchup data found for Week {activeSimWeek}. Matchups might be scheduled closer to game day.
                     </div>
                   )
                 }
 
-                const weekMedianCount = Object.keys(simMedianWinners[simSelectedWeek] || {}).length
+                const weekMedianCount = Object.keys(simMedianWinners[activeSimWeek] || {}).length
                 const maxMedianWinners = Math.floor((clinchSummary?.totalTeams ?? 12) / 2)
                 const isMedianFull = weekMedianCount >= maxMedianWinners
 
@@ -1220,7 +1379,7 @@ export function App() {
                         <div className="sim-median-cap-info">
                           <Zap size={14} color="#38bdf8" />
                           <span>
-                            Week {simSelectedWeek} Scoring Median: <strong>{weekMedianCount} / {maxMedianWinners} Winners Selected</strong>
+                            Week {activeSimWeek} Scoring Median: <strong>{weekMedianCount} / {maxMedianWinners} Winners Selected</strong>
                           </span>
                           <span className="median-rule-note">(Strictly 50% of the league beats median)</span>
                         </div>
@@ -1237,9 +1396,9 @@ export function App() {
                         const t2 = clinchSummary?.teams.find((t) => t.rosterId === pair[1].roster_id)
                         if (!t1 || !t2) return null
 
-                        const pickedWinnerId = simMatchupWinners[simSelectedWeek]?.[matchupId]
-                        const t1MedianBeater = Boolean(simMedianWinners[simSelectedWeek]?.[t1.rosterId])
-                        const t2MedianBeater = Boolean(simMedianWinners[simSelectedWeek]?.[t2.rosterId])
+                        const pickedWinnerId = simMatchupWinners[activeSimWeek]?.[matchupId]
+                        const t1MedianBeater = Boolean(simMedianWinners[activeSimWeek]?.[t1.rosterId])
+                        const t2MedianBeater = Boolean(simMedianWinners[activeSimWeek]?.[t2.rosterId])
                         const t1Disabled = !t1MedianBeater && isMedianFull
                         const t2Disabled = !t2MedianBeater && isMedianFull
 
@@ -1247,7 +1406,7 @@ export function App() {
                           <div key={matchupId} className="sim-matchup-card">
                             <div className="sim-matchup-header">
                               <span>MATCHUP #{matchupId}</span>
-                              <span>WEEK {simSelectedWeek}</span>
+                              <span>WEEK {activeSimWeek}</span>
                             </div>
 
                             <div className="sim-teams-row">
@@ -1255,7 +1414,7 @@ export function App() {
                               <button
                                 type="button"
                                 className={`sim-team-box ${pickedWinnerId === t1.rosterId ? 'winner' : pickedWinnerId === t2.rosterId ? 'loser' : ''}`}
-                                onClick={() => handlePickWinner(simSelectedWeek, matchupId, t1.rosterId)}
+                                onClick={() => handlePickWinner(activeSimWeek, matchupId, t1.rosterId)}
                               >
                                 <div className="sim-team-info">
                                   <span className="sim-team-seed">#{t1.seed}</span>
@@ -1273,7 +1432,7 @@ export function App() {
                               <button
                                 type="button"
                                 className={`sim-team-box ${pickedWinnerId === t2.rosterId ? 'winner' : pickedWinnerId === t1.rosterId ? 'loser' : ''}`}
-                                onClick={() => handlePickWinner(simSelectedWeek, matchupId, t2.rosterId)}
+                                onClick={() => handlePickWinner(activeSimWeek, matchupId, t2.rosterId)}
                               >
                                 <div className="sim-team-info">
                                   <span className="sim-team-seed">#{t2.seed}</span>
@@ -1294,9 +1453,9 @@ export function App() {
                                   <button
                                     type="button"
                                     className={`median-chk ${t1MedianBeater ? 'checked' : ''} ${t1Disabled ? 'disabled' : ''}`}
-                                    onClick={() => handleToggleMedian(simSelectedWeek, t1.rosterId)}
+                                    onClick={() => handleToggleMedian(activeSimWeek, t1.rosterId)}
                                     disabled={t1Disabled}
-                                    title={t1Disabled ? `Maximum ${maxMedianWinners} median winners already selected for Week ${simSelectedWeek}. Uncheck another team first.` : ''}
+                                    title={t1Disabled ? `Maximum ${maxMedianWinners} median winners already selected for Week ${activeSimWeek}. Uncheck another team first.` : ''}
                                   >
                                     {t1MedianBeater && <Check size={10} />}
                                     <span>{t1.name.slice(0, 10)} (+1W)</span>
@@ -1304,9 +1463,9 @@ export function App() {
                                   <button
                                     type="button"
                                     className={`median-chk ${t2MedianBeater ? 'checked' : ''} ${t2Disabled ? 'disabled' : ''}`}
-                                    onClick={() => handleToggleMedian(simSelectedWeek, t2.rosterId)}
+                                    onClick={() => handleToggleMedian(activeSimWeek, t2.rosterId)}
                                     disabled={t2Disabled}
-                                    title={t2Disabled ? `Maximum ${maxMedianWinners} median winners already selected for Week ${simSelectedWeek}. Uncheck another team first.` : ''}
+                                    title={t2Disabled ? `Maximum ${maxMedianWinners} median winners already selected for Week ${activeSimWeek}. Uncheck another team first.` : ''}
                                   >
                                     {t2MedianBeater && <Check size={10} />}
                                     <span>{t2.name.slice(0, 10)} (+1W)</span>
