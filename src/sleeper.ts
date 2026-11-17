@@ -1,3 +1,11 @@
+import {
+  getPlayerIndex,
+  normalizeTeam,
+  scoreStatLine,
+  type FutureWeekProjectionFeed,
+  type SleeperPlayer,
+} from './rosterProjections'
+
 export interface SleeperLeague {
   league_id: string
   name: string
@@ -15,6 +23,8 @@ export interface SleeperRoster {
   owner_id: string | null
   players: string[] | null
   starters?: string[] | null
+  taxi?: string[] | null
+  reserve?: string[] | null
   settings: {
     wins?: number
     losses?: number
@@ -61,6 +71,9 @@ interface SleeperProjectionItem {
 }
 
 interface EspnScoreboard {
+  week?: {
+    teamsOnBye?: Array<{ abbreviation?: string }>
+  }
   events?: Array<{
     competitions?: Array<{
       competitors?: Array<{ team?: { abbreviation?: string } }>
@@ -69,36 +82,11 @@ interface EspnScoreboard {
   }>
 }
 
-const ESPN_TO_SLEEPER_TEAM: Record<string, string> = {
-  WSH: 'WAS',
-  JAC: 'JAX',
-  LA: 'LAR',
-}
-
-function normalizeTeam(abbr?: string | null): string | undefined {
-  if (!abbr) return undefined
-  return ESPN_TO_SLEEPER_TEAM[abbr] ?? abbr
-}
-
 function parseClockSeconds(displayClock?: string): number {
   if (!displayClock) return 900
   const m = displayClock.trim().match(/^(\d+):(\d{2})$/)
   if (m) return Number(m[1]) * 60 + Number(m[2])
   return 900
-}
-
-function scoreStatLine(stats: Record<string, number> | undefined, scoring: Record<string, number>): number {
-  if (!stats) return 0
-  let total = 0
-  let matched = false
-  for (const [k, v] of Object.entries(stats)) {
-    if (typeof v === 'number' && Number.isFinite(v) && typeof scoring[k] === 'number') {
-      total += v * scoring[k]
-      matched = true
-    }
-  }
-  if (matched) return Math.max(0, total)
-  return Math.max(0, Number(stats.pts_ppr ?? stats.pts_half_ppr ?? stats.pts_std) || 0)
 }
 
 export interface NflState {
@@ -136,6 +124,8 @@ export interface LeagueData {
   hasMedianMatch: boolean
   totalTeams: number
   weeks: Record<number, WeekMatchupFeed>
+  players?: Record<string, SleeperPlayer>
+  futureWeekProjections?: Record<number, FutureWeekProjectionFeed>
   lastUpdated: number
 }
 
@@ -336,6 +326,40 @@ export async function loadLeagueData(leagueId: string, signal?: AbortSignal): Pr
     }
   }
 
+  // Fetch player index + future-week Sleeper projections & ESPN bye teams for roster-based simulation
+  const futureWeekProjections: Record<number, FutureWeekProjectionFeed> = {}
+  let players: Record<string, SleeperPlayer> | undefined
+  const projectionStartWeek = Math.max(1, lastScoredWeek + 1)
+  if (projectionStartWeek <= regularSeasonWeeks) {
+    const futureWeeks = Array.from(
+      { length: regularSeasonWeeks - projectionStartWeek + 1 },
+      (_, idx) => projectionStartWeek + idx,
+    )
+    const [playerMap, ...weekFeeds] = await Promise.all([
+      getPlayerIndex(signal).catch(catchNonAbort<Record<string, SleeperPlayer> | undefined>(undefined)),
+      ...futureWeeks.map(async (week) => {
+        const [proj, sb] = await Promise.all([
+          getJson<Record<string, Record<string, number>>>(
+            `${SLEEPER_API}/projections/nfl/regular/${league.season}/${week}?season_type=regular`,
+            signal,
+          ).catch(catchNonAbort<Record<string, Record<string, number>>>({})),
+          getJson<EspnScoreboard>(
+            `https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?seasontype=2&week=${week}&year=${league.season}`,
+            signal,
+          ).catch(catchNonAbort<EspnScoreboard | null>(null)),
+        ])
+        const byes = (sb?.week?.teamsOnBye ?? [])
+          .map((t) => normalizeTeam(t.abbreviation))
+          .filter((abbr): abbr is string => Boolean(abbr))
+        return { week, projections: proj ?? {}, byes }
+      }),
+    ])
+    players = playerMap
+    for (const feed of weekFeeds) {
+      futureWeekProjections[feed.week] = feed
+    }
+  }
+
   return {
     league,
     rosters,
@@ -348,6 +372,8 @@ export async function loadLeagueData(leagueId: string, signal?: AbortSignal): Pr
     hasMedianMatch,
     totalTeams,
     weeks,
+    players,
+    futureWeekProjections,
     lastUpdated: Date.now(),
   }
 }

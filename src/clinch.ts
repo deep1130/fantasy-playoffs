@@ -1,4 +1,5 @@
 import type { LeagueData, SleeperMatchup, SleeperRoster } from './sleeper'
+import { projectRosterWeeks } from './rosterProjections'
 import { simulateSeasonOdds, type SimScheduleWeek } from './simulation'
 
 export type ClinchStatus =
@@ -464,6 +465,15 @@ export function analyzeLeagueClinch(
     remainingScheduleWeeks.push({ week: w, pairs: weekPairs })
   }
 
+  const projectedMeansByRoster = projectRosterWeeks({
+    rosterPositions: data.league.roster_positions,
+    scoringSettings: data.league.scoring_settings || {},
+    rosters: data.rosters,
+    players: data.players,
+    futureWeeks: data.futureWeekProjections,
+    weeks: remainingScheduleWeeks.map((w) => w.week),
+  })
+
   // Schedule-aware Monte Carlo simulation for Playoff & Bye probabilities
   const simOdds = simulateSeasonOdds({
     seedKey: `${data.league.league_id}:${effectiveCompletedWeeks}:${isUsingLiveWeek ? 1 : 0}:${regularSeasonEnd}`,
@@ -472,6 +482,7 @@ export function analyzeLeagueClinch(
       effectiveWins: t.effectiveWins,
       pointsFor: t.pointsFor,
       weeklyScores: t.acc.weeklyDetails.map((d) => d.points),
+      weeklyProjectedMeans: projectedMeansByRoster.get(t.rosterId),
     })),
     schedule: remainingScheduleWeeks,
     hasMedianMatch,

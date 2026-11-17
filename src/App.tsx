@@ -1830,7 +1830,7 @@ export function App() {
                 <strong>Win Range</strong> displays your mathematical floor (current wins if you lose out) and ceiling (<code>Max Possible Wins</code> if you win every remaining H2H and Median game).
               </p>
               <p>
-                <strong>Postseason Odds</strong> simulate 5,000 remaining regular-season schedules using each team's scoring average and variance, exact upcoming H2H matchups, weekly league median scoring, and <strong>Points For (PF)</strong> tiebreakers.
+                <strong>Postseason Odds</strong> simulate 5,000 remaining regular-season schedules using each team's current roster projections for each upcoming week (adjusting for NFL bye weeks and injury status), historical scoring variance, exact H2H matchups, weekly league median scoring, and <strong>Points For (PF)</strong> tiebreakers.
               </p>
             </div>
 

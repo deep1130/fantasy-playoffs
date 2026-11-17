@@ -3,6 +3,7 @@ export interface SimTeamInput {
   effectiveWins: number
   pointsFor: number
   weeklyScores: number[]
+  weeklyProjectedMeans?: (number | undefined)[]
 }
 
 export interface SimScheduleWeek {
@@ -165,7 +166,8 @@ export function simulateSeasonOdds(params: {
 
     for (let w = 0; w < resolvedWeeks.length; w += 1) {
       for (let i = 0; i < n; i += 1) {
-        const s = Math.max(0, means[i] + stdDevs[i] * sampleNormal())
+        const weekMean = teams[i].weeklyProjectedMeans?.[w] ?? means[i]
+        const s = Math.max(0, weekMean + stdDevs[i] * sampleNormal())
         weekScores[i] = s
         simPf[i] += s
       }
