@@ -1,4 +1,5 @@
 import type { LeagueData, SleeperMatchup, SleeperRoster } from './sleeper'
+import { simulateSeasonOdds, type SimScheduleWeek } from './simulation'
 
 export type ClinchStatus =
   | 'CLINCHED_BYE'
@@ -438,25 +439,45 @@ export function analyzeLeagueClinch(
   // Build remaining head-to-head schedule matrix so contenders playing each other are factored into clinch/elimination math
   const pairKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`)
   const remainingPairGames = new Map<string, number>()
+  const remainingScheduleWeeks: SimScheduleWeek[] = []
   const upcomingStartWeek = effectiveCompletedWeeks + 1
   for (let w = upcomingStartWeek; w <= regularSeasonEnd; w += 1) {
     const wFeed = data.weeks[w]
-    if (!wFeed?.matchups?.length) continue
-    const byMatchup = new Map<number, number[]>()
-    for (const m of wFeed.matchups) {
-      if (m.matchup_id != null) {
-        const list = byMatchup.get(m.matchup_id) || []
-        list.push(m.roster_id)
-        byMatchup.set(m.matchup_id, list)
+    const weekPairs: [number, number][] = []
+    if (wFeed?.matchups?.length) {
+      const byMatchup = new Map<number, number[]>()
+      for (const m of wFeed.matchups) {
+        if (m.matchup_id != null) {
+          const list = byMatchup.get(m.matchup_id) || []
+          list.push(m.roster_id)
+          byMatchup.set(m.matchup_id, list)
+        }
+      }
+      for (const pair of byMatchup.values()) {
+        if (pair.length === 2 && pair[0] !== pair[1]) {
+          const key = pairKey(pair[0], pair[1])
+          remainingPairGames.set(key, (remainingPairGames.get(key) ?? 0) + 1)
+          weekPairs.push([pair[0], pair[1]])
+        }
       }
     }
-    for (const pair of byMatchup.values()) {
-      if (pair.length === 2 && pair[0] !== pair[1]) {
-        const key = pairKey(pair[0], pair[1])
-        remainingPairGames.set(key, (remainingPairGames.get(key) ?? 0) + 1)
-      }
-    }
+    remainingScheduleWeeks.push({ week: w, pairs: weekPairs })
   }
+
+  // Schedule-aware Monte Carlo simulation for Playoff & Bye probabilities
+  const simOdds = simulateSeasonOdds({
+    seedKey: `${data.league.league_id}:${effectiveCompletedWeeks}:${isUsingLiveWeek ? 1 : 0}:${regularSeasonEnd}`,
+    teams: sortedTeams.map((t) => ({
+      rosterId: t.rosterId,
+      effectiveWins: t.effectiveWins,
+      pointsFor: t.pointsFor,
+      weeklyScores: t.acc.weeklyDetails.map((d) => d.points),
+    })),
+    schedule: remainingScheduleWeeks,
+    hasMedianMatch,
+    playoffSpots,
+    byeSpots,
+  })
 
   const getPairH2hGames = (a: number, b: number): number => {
     if (a === b) return 0
@@ -662,13 +683,15 @@ export function analyzeLeagueClinch(
     const medianWinPct = medianGames > 0 ? acc.medianWins / medianGames : 0.5
 
     // -------------------------------------------------------------
-    // PLAYOFF CLINCH LOGIC (Schedule-Aware Top K)
+    // PLAYOFF CLINCH LOGIC (Schedule-Aware Top K, PF unlocked while weeks remain)
     // -------------------------------------------------------------
+    const pfLocked = remainingWeeks === 0
+
     const hasClinchedPlayoff = !canKTeamsSurpassTarget(
       entry.rosterId,
       effectiveWins,
       pointsFor,
-      true,
+      pfLocked,
       playoffSpots,
     )
 
@@ -676,7 +699,7 @@ export function analyzeLeagueClinch(
       entry.rosterId,
       maxPossibleWins,
       pointsFor,
-      true,
+      pfLocked,
       playoffSpots,
     )
 
@@ -689,7 +712,7 @@ export function analyzeLeagueClinch(
       magicNumber = null
     } else if (chaserTeam) {
       const chaserMax = Math.ceil(chaserTeam.effectiveWins + remainingGamesPerTeam)
-      const naiveMagic = Math.max(1, Math.ceil(chaserMax + 1 - effectiveWins))
+      const naiveMagic = Math.max(1, Math.floor(chaserMax - effectiveWins) + 1)
       let maxSimultaneousThreatWins = Math.floor(effectiveWins)
       for (let w = chaserMax; w >= Math.floor(effectiveWins); w -= 1) {
         if (canKTeamsSurpassTarget(entry.rosterId, w, Infinity, false, playoffSpots)) {
@@ -697,7 +720,7 @@ export function analyzeLeagueClinch(
           break
         }
       }
-      magicNumber = Math.max(1, Math.ceil(maxSimultaneousThreatWins + 1 - effectiveWins))
+      magicNumber = Math.max(1, Math.floor(maxSimultaneousThreatWins - effectiveWins) + 1)
       playoffCannibalizedLosses = Math.max(0, naiveMagic - magicNumber)
     }
 
@@ -710,7 +733,7 @@ export function analyzeLeagueClinch(
       eliminationNumber = 0
     } else if (cutoffTeam) {
       const baseCutoffWins = Math.floor(cutoffTeam.effectiveWins)
-      const naiveElim = Math.max(1, Math.ceil(maxPossibleWins + 1 - cutoffTeam.effectiveWins))
+      const naiveElim = Math.max(1, Math.floor(maxPossibleWins - cutoffTeam.effectiveWins) + 1)
       let effectiveCutoffFloor = cutoffTeam.effectiveWins
       for (let w = baseCutoffWins; w <= Math.ceil(maxPossibleWins); w += 1) {
         if (canTeamFinishTopK(entry.rosterId, w, Infinity, false, playoffSpots)) {
@@ -718,22 +741,22 @@ export function analyzeLeagueClinch(
           break
         }
       }
-      eliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - effectiveCutoffFloor))
+      eliminationNumber = Math.max(1, Math.floor(maxPossibleWins - effectiveCutoffFloor) + 1)
       playoffGuaranteedCutoffWins = Math.max(0, naiveElim - eliminationNumber)
     }
 
     const gamesBehindCutoff = cutoffTeam ? cutoffTeam.effectiveWins - effectiveWins : 0
 
     // -------------------------------------------------------------
-    // FIRST-ROUND BYE CLINCH LOGIC (Schedule-Aware Top B)
+    // FIRST-ROUND BYE CLINCH LOGIC (Schedule-Aware Top B, PF unlocked while weeks remain)
     // -------------------------------------------------------------
     const hasClinchedBye =
       byeSpots > 0 &&
-      !canKTeamsSurpassTarget(entry.rosterId, effectiveWins, pointsFor, true, byeSpots)
+      !canKTeamsSurpassTarget(entry.rosterId, effectiveWins, pointsFor, pfLocked, byeSpots)
 
     const isEliminatedFromBye =
       byeSpots === 0 ||
-      !canTeamFinishTopK(entry.rosterId, maxPossibleWins, pointsFor, true, byeSpots)
+      !canTeamFinishTopK(entry.rosterId, maxPossibleWins, pointsFor, pfLocked, byeSpots)
 
     // Schedule-aware Magic Number for Bye (Seed 1 & 2 vs Seed 3+) - accounts for bye contenders playing each other
     let byeMagicNumber: number | null = null
@@ -744,7 +767,7 @@ export function analyzeLeagueClinch(
       byeMagicNumber = null
     } else if (byeChaserTeam) {
       const byeChaserMax = Math.ceil(byeChaserTeam.effectiveWins + remainingGamesPerTeam)
-      const naiveByeMagic = Math.max(1, Math.ceil(byeChaserMax + 1 - effectiveWins))
+      const naiveByeMagic = Math.max(1, Math.floor(byeChaserMax - effectiveWins) + 1)
       let maxSimultaneousByeThreatWins = Math.floor(effectiveWins)
       for (let w = byeChaserMax; w >= Math.floor(effectiveWins); w -= 1) {
         if (canKTeamsSurpassTarget(entry.rosterId, w, Infinity, false, byeSpots)) {
@@ -752,7 +775,7 @@ export function analyzeLeagueClinch(
           break
         }
       }
-      byeMagicNumber = Math.max(1, Math.ceil(maxSimultaneousByeThreatWins + 1 - effectiveWins))
+      byeMagicNumber = Math.max(1, Math.floor(maxSimultaneousByeThreatWins - effectiveWins) + 1)
       byeCannibalizedLosses = Math.max(0, naiveByeMagic - byeMagicNumber)
     }
 
@@ -765,7 +788,7 @@ export function analyzeLeagueClinch(
       byeEliminationNumber = 0
     } else if (byeCutoffTeam) {
       const baseByeFloor = Math.floor(byeCutoffTeam.effectiveWins)
-      const naiveByeElim = Math.max(1, Math.ceil(maxPossibleWins + 1 - byeCutoffTeam.effectiveWins))
+      const naiveByeElim = Math.max(1, Math.floor(maxPossibleWins - byeCutoffTeam.effectiveWins) + 1)
       let effectiveByeFloor = byeCutoffTeam.effectiveWins
       for (let w = baseByeFloor; w <= Math.ceil(maxPossibleWins); w += 1) {
         if (canTeamFinishTopK(entry.rosterId, w, Infinity, false, byeSpots)) {
@@ -773,25 +796,21 @@ export function analyzeLeagueClinch(
           break
         }
       }
-      byeEliminationNumber = Math.max(1, Math.ceil(maxPossibleWins + 1 - effectiveByeFloor))
+      byeEliminationNumber = Math.max(1, Math.floor(maxPossibleWins - effectiveByeFloor) + 1)
       byeGuaranteedCutoffWins = Math.max(0, naiveByeElim - byeEliminationNumber)
     }
 
     const gamesBehindBye = byeCutoffTeam ? byeCutoffTeam.effectiveWins - effectiveWins : 0
 
-    // Probabilities
+    // Probabilities from Monte Carlo simulation, bounded by exact mathematical clinch/elimination state
     let playoffProbability = 0
     if (hasClinchedPlayoff) {
       playoffProbability = 1.0
     } else if (isEliminatedFromPlayoffs) {
       playoffProbability = 0.0
     } else {
-      const pointDifferential = pointsFor - (cutoffTeam?.pointsFor ?? pointsFor)
-      const pointScoreFactor = Math.min(2.0, Math.max(-2.0, pointDifferential / 150))
-      const netGameLead = effectiveWins - (cutoffTeam?.effectiveWins ?? 0)
-      const weeksFactor = Math.max(1, remainingWeeks)
-      const z = (netGameLead * (hasMedianMatch ? 0.9 : 1.5) + pointScoreFactor) / Math.sqrt(weeksFactor)
-      playoffProbability = Math.min(0.99, Math.max(0.01, 1 / (1 + Math.exp(-z))))
+      const raw = simOdds.playoffProbabilities.get(entry.rosterId) ?? 0.5
+      playoffProbability = Math.min(0.999, Math.max(0.001, raw))
     }
 
     let byeProbability = 0
@@ -800,11 +819,9 @@ export function analyzeLeagueClinch(
         byeProbability = 1.0
       } else if (isEliminatedFromBye) {
         byeProbability = 0.0
-      } else if (byeChaserTeam) {
-        const byePointDiff = pointsFor - byeChaserTeam.pointsFor
-        const byeLead = effectiveWins - byeChaserTeam.effectiveWins
-        const zBye = (byeLead * (hasMedianMatch ? 0.8 : 1.4) + byePointDiff / 140) / Math.sqrt(Math.max(1, remainingWeeks))
-        byeProbability = Math.min(0.98, Math.max(0.02, 1 / (1 + Math.exp(-zBye))))
+      } else {
+        const raw = simOdds.byeProbabilities.get(entry.rosterId) ?? 0.25
+        byeProbability = Math.min(0.999, Math.max(0.001, raw))
       }
     }
 

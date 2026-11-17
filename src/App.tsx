@@ -72,6 +72,7 @@ const formatDec = (val: number, decimals = 1) =>
   })
 
 const formatPct = (chance: number) => {
+  if (chance >= 0.9999) return '100%'
   if (chance >= 0.99) return '>99%'
   if (chance <= 0.01 && chance > 0) return '<1%'
   if (chance === 0) return '0%'
@@ -1827,7 +1828,7 @@ export function App() {
                 <strong>Win Range</strong> displays your mathematical floor (current wins if you lose out) and ceiling (<code>Max Possible Wins</code> if you win every remaining H2H and Median game).
               </p>
               <p>
-                <strong>Postseason Odds</strong> estimate Playoff and Bye probability using current win cushions, remaining schedule, and <strong>Points For (PF)</strong>—which serves as Sleeper's primary standings tiebreaker when teams finish with identical records.
+                <strong>Postseason Odds</strong> simulate 5,000 remaining regular-season schedules using each team's scoring average and variance, exact upcoming H2H matchups, weekly league median scoring, and <strong>Points For (PF)</strong> tiebreakers.
               </p>
             </div>
 
