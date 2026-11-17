@@ -911,6 +911,28 @@ export function analyzeLeagueClinch(
     // -------------------------------------------------------------
     // RICH CLINCH SCENARIOS & EXPLANATIONS
     // -------------------------------------------------------------
+    const formatTiedRivals = (
+      refTeam: (typeof sortedTeams)[number] | null | undefined,
+      fallbackLabel: string,
+    ): { label: string; count: number } => {
+      if (!refTeam) return { label: fallbackLabel, count: 1 }
+      const tied = sortedTeams.filter(
+        (t) => t.rosterId !== entry.rosterId && t.effectiveWins === refTeam.effectiveWins,
+      )
+      if (tied.length === 0) return { label: fallbackLabel, count: 1 }
+      if (tied.length === 1) return { label: tied[0].acc.name, count: 1 }
+      if (tied.length === 2) return { label: `${tied[0].acc.name} & ${tied[1].acc.name}`, count: 2 }
+      return {
+        label: `${tied[0].acc.name}, ${tied[1].acc.name} (+${tied.length - 2} tied)`,
+        count: tied.length,
+      }
+    }
+
+    const playoffChaser = formatTiedRivals(chaserTeam, `Seed ${playoffSpots + 1}`)
+    const playoffCutoff = formatTiedRivals(cutoffTeam, `Seed ${playoffSpots}`)
+    const byeChaser = formatTiedRivals(byeChaserTeam, `Seed ${byeSpots + 1}`)
+    const byeCutoff = formatTiedRivals(byeCutoffTeam, `Seed ${byeSpots}`)
+
     let magicNumberExplanation = ''
     if (hasClinchedPlayoff) {
       magicNumberExplanation = `Clinched Playoff Spot. Locked in the top ${playoffSpots}.`
@@ -921,14 +943,22 @@ export function analyzeLeagueClinch(
         playoffCannibalizedLosses > 0
           ? ` (already reduced by ${playoffCannibalizedLosses} guaranteed loss${playoffCannibalizedLosses > 1 ? 'es' : ''} from contenders playing each other)`
           : ''
-      magicNumberExplanation = `Playoff Magic Number: ${magicNumber}${schedNote}. Needs any combination of ${magicNumber} team wins and ${chaserTeam?.acc.name ?? 'Seed 7'} losses across remaining weeks to guarantee a playoff berth.`
+      const chaserPhrase =
+        playoffChaser.count > 1
+          ? `losses by ${playoffChaser.label} (${playoffChaser.count} tied)`
+          : `${playoffChaser.label} losses`
+      magicNumberExplanation = `Playoff Magic Number: ${magicNumber}${schedNote}. Needs any combination of ${magicNumber} team wins and ${chaserPhrase} across remaining weeks to guarantee a playoff berth.`
     } else {
       const behindText = gamesBehindCutoff === 0 ? 'tied with' : `${gamesBehindCutoff.toFixed(1)} games behind`
       const schedNote =
         playoffGuaranteedCutoffWins > 0
           ? ` (tightened by ${playoffGuaranteedCutoffWins} game${playoffGuaranteedCutoffWins > 1 ? 's' : ''} because cutoff rivals play each other)`
           : ''
-      magicNumberExplanation = `Elimination Number: ${eliminationNumber}${schedNote}. Currently ${behindText} ${cutoffTeam?.acc.name ?? 'Seed 6'}. Any combination of ${eliminationNumber} team losses and ${cutoffTeam?.acc.name ?? 'Seed 6'} wins results in mathematical elimination.`
+      const cutoffPhrase =
+        playoffCutoff.count > 1
+          ? `wins by ${playoffCutoff.label} (${playoffCutoff.count} tied)`
+          : `${playoffCutoff.label} wins`
+      magicNumberExplanation = `Elimination Number: ${eliminationNumber}${schedNote}. Currently ${behindText} ${playoffCutoff.label}. Any combination of ${eliminationNumber} team losses and ${cutoffPhrase} results in mathematical elimination.`
     }
 
     let byeExplanation = ''
@@ -942,13 +972,17 @@ export function analyzeLeagueClinch(
           byeCannibalizedLosses > 0
             ? ` (already reduced by ${byeCannibalizedLosses} guaranteed loss${byeCannibalizedLosses > 1 ? 'es' : ''} from bye contenders playing each other)`
             : ''
-        byeExplanation = `Bye Magic Number: ${byeMagicNumber}${schedNote}. Needs any combination of ${byeMagicNumber} team wins and ${byeChaserTeam?.acc.name ?? 'Seed 3'} losses to secure a top-2 first-round bye.`
+        const byeChaserPhrase =
+          byeChaser.count > 1
+            ? `losses by ${byeChaser.label} (${byeChaser.count} tied)`
+            : `${byeChaser.label} losses`
+        byeExplanation = `Bye Magic Number: ${byeMagicNumber}${schedNote}. Needs any combination of ${byeMagicNumber} team wins and ${byeChaserPhrase} to secure a top-${byeSpots} first-round bye.`
       } else {
         const schedNote =
           byeGuaranteedCutoffWins > 0
             ? ` (tightened by ${byeGuaranteedCutoffWins} game${byeGuaranteedCutoffWins > 1 ? 's' : ''} because bye contenders play each other)`
             : ''
-        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}${schedNote}. Trails Seed #2 (${byeCutoffTeam?.acc.name ?? 'Seed 2'}) by ${gamesBehindBye.toFixed(1)} games.`
+        byeExplanation = `Bye Elimination Number: ${byeEliminationNumber}${schedNote}. Trails ${byeCutoff.label} by ${gamesBehindBye.toFixed(1)} games.`
       }
     }
 
@@ -978,8 +1012,9 @@ export function analyzeLeagueClinch(
         if (hasMedianMatch) {
           const m2 = Math.max(0, magicNumber - 2)
           const m1 = Math.max(0, magicNumber - 1)
+          const chaserTarget = playoffChaser.count > 1 ? `${playoffChaser.label} go 0-2` : `${playoffChaser.label} goes 0-2`
           weekImpactScenarios.push(
-            `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Drops Playoff M# to ${m2} (or ${Math.max(0, m2 - 2)} if chaser goes 0-2).`,
+            `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Drops Playoff M# to ${m2} (or ${Math.max(0, m2 - 2)} if ${chaserTarget}).`,
           )
           weekImpactScenarios.push(
             `1-1 Week (Split H2H / Median): Moves to ${totalWins + 1}–${totalLosses + 1}. Reduces Playoff M# by 1 (down to ${m1}).`,
@@ -988,8 +1023,9 @@ export function analyzeLeagueClinch(
             `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Playoff M# holds at ${magicNumber}.`,
           )
         } else {
+          const chaserTarget = playoffChaser.count > 1 ? `${playoffChaser.label} lose` : `${playoffChaser.label} loses`
           weekImpactScenarios.push(
-            `Win: Moves to ${totalWins + 1}–${totalLosses}. Drops Playoff M# by 1 (or 2 if chaser loses).`,
+            `Win: Moves to ${totalWins + 1}–${totalLosses}. Drops Playoff M# by 1 (or 2 if ${chaserTarget}).`,
           )
           weekImpactScenarios.push(
             `Loss: Moves to ${totalWins}–${totalLosses + 1}. Playoff M# remains at ${magicNumber}.`,
@@ -998,6 +1034,7 @@ export function analyzeLeagueClinch(
       } else if (eliminationNumber !== null) {
         if (hasMedianMatch) {
           const e2 = Math.max(0, eliminationNumber - 2)
+          const cutoffTarget = playoffCutoff.count > 1 ? `${playoffCutoff.label} go 2-0` : `${playoffCutoff.label} goes 2-0`
           weekImpactScenarios.push(
             `2-0 Week (Win H2H + Beat Median): Moves to ${totalWins + 2}–${totalLosses}. Preserves Elimination Number at ${eliminationNumber} and gains up to 2 games on cutoff.`,
           )
@@ -1005,7 +1042,7 @@ export function analyzeLeagueClinch(
             `1-1 Week (Split H2H / Median): Moves to ${totalWins + 1}–${totalLosses + 1}. Maintains pace with the playoff cutoff.`,
           )
           weekImpactScenarios.push(
-            `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Reduces Elimination Number to ${e2} (or ${Math.max(0, e2 - 2)} if cutoff goes 2-0).`,
+            `0-2 Week (Loss H2H + Below Median): Moves to ${totalWins}–${totalLosses + 2}. Reduces Elimination Number to ${e2} (or ${Math.max(0, e2 - 2)} if ${cutoffTarget}).`,
           )
         } else {
           weekImpactScenarios.push(
@@ -1026,12 +1063,18 @@ export function analyzeLeagueClinch(
     if (!hasClinchedPlayoff && !isEliminatedFromPlayoffs && remainingWeeks > 0) {
       if (magicNumber !== null && magicNumber <= gamesPerWeek * 2) {
         if (hasMedianMatch) {
-          clinchThisWeekScenarios.push(`2-0 Week (Win H2H + Beat Median) AND ${chaserTeam?.acc.name ?? 'Seed 7'} loses at least 1 game`)
+          clinchThisWeekScenarios.push(
+            `2-0 Week (Win H2H + Beat Median) AND ${playoffChaser.count > 1 ? `${playoffChaser.label} each lose` : `${playoffChaser.label} loses`} at least 1 game`,
+          )
           if (magicNumber <= 2) {
-            clinchThisWeekScenarios.push(`1 Win this week AND ${chaserTeam?.acc.name ?? 'Seed 7'} loses both games`)
+            clinchThisWeekScenarios.push(
+              `1 Win this week AND ${playoffChaser.count > 1 ? `${playoffChaser.label} each lose` : `${playoffChaser.label} loses`} both games`,
+            )
           }
         } else {
-          clinchThisWeekScenarios.push(`Win vs. Opponent AND Loss by ${chaserTeam?.acc.name ?? 'Seed 7'}`)
+          clinchThisWeekScenarios.push(
+            `Win vs. Opponent AND ${playoffChaser.count > 1 ? `Losses by ${playoffChaser.label}` : `Loss by ${playoffChaser.label}`}`,
+          )
         }
       }
     }
@@ -1040,9 +1083,13 @@ export function analyzeLeagueClinch(
     if (byeSpots > 0 && !hasClinchedBye && !isEliminatedFromBye && remainingWeeks > 0) {
       if (byeMagicNumber !== null && byeMagicNumber <= gamesPerWeek * 2) {
         if (hasMedianMatch) {
-          clinchByeThisWeekScenarios.push(`2-0 Week (Win H2H + Beat Median) AND ${byeChaserTeam?.acc.name ?? 'Seed 3'} loses at least 1 game`)
+          clinchByeThisWeekScenarios.push(
+            `2-0 Week (Win H2H + Beat Median) AND ${byeChaser.count > 1 ? `${byeChaser.label} each lose` : `${byeChaser.label} loses`} at least 1 game`,
+          )
         } else {
-          clinchByeThisWeekScenarios.push(`Win vs. Opponent AND Loss by ${byeChaserTeam?.acc.name ?? 'Seed 3'}`)
+          clinchByeThisWeekScenarios.push(
+            `Win vs. Opponent AND ${byeChaser.count > 1 ? `Losses by ${byeChaser.label}` : `Loss by ${byeChaser.label}`}`,
+          )
         }
       }
     }
@@ -1051,9 +1098,13 @@ export function analyzeLeagueClinch(
     if (!hasClinchedPlayoff && !isEliminatedFromPlayoffs && remainingWeeks > 0) {
       if (eliminationNumber !== null && eliminationNumber <= gamesPerWeek * 2) {
         if (hasMedianMatch) {
-          eliminatedThisWeekScenarios.push(`0-2 Week (Loss + Below Median) AND ${cutoffTeam?.acc.name ?? 'Seed 6'} wins at least 1 game`)
+          eliminatedThisWeekScenarios.push(
+            `0-2 Week (Loss + Below Median) AND ${playoffCutoff.count > 1 ? `${playoffCutoff.label} win` : `${playoffCutoff.label} wins`} at least 1 game`,
+          )
         } else {
-          eliminatedThisWeekScenarios.push(`Loss vs. Opponent AND Win by ${cutoffTeam?.acc.name ?? 'Seed 6'}`)
+          eliminatedThisWeekScenarios.push(
+            `Loss vs. Opponent AND ${playoffCutoff.count > 1 ? `Wins by ${playoffCutoff.label}` : `Win by ${playoffCutoff.label}`}`,
+          )
         }
       }
     }

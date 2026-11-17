@@ -937,7 +937,9 @@ export function App() {
           <span className="summary-note">
             {byeSpots > 0
               ? (seed2 && seed3
-                  ? `#2 ${seed2.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)}) leads #3 ${seed3.name} (${formatRecord(seed3.totalWins, seed3.totalLosses, seed3.totalTies)})`
+                  ? (seed2.totalWins + seed2.totalTies * 0.5) === (seed3.totalWins + seed3.totalTies * 0.5)
+                    ? `Tied: #2 ${seed2.name} & #3 ${seed3.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)})`
+                    : `#2 ${seed2.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)}) leads #3 ${seed3.name} (${formatRecord(seed3.totalWins, seed3.totalLosses, seed3.totalTies)})`
                   : `Seeds 1–${byeSpots} earn bye to semifinals`)
               : (seed2
                   ? `Leads #2 ${seed2.name} (${formatRecord(seed2.totalWins, seed2.totalLosses, seed2.totalTies)})`
